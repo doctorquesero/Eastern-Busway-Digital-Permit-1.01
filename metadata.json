@@ -1,0 +1,9 @@
+{
+  "name": "Can you dig it V1.010",
+  "description": "A digital work permit platform replacing paper forms with a secure, database-backed register, digital signatures, and real-time safety insights.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
