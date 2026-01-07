@@ -1,11 +1,16 @@
 steps:
-  - name: gcr.io/k8s-skaffold/pack
+  - name: 'gcr.io/cloud-builders/docker'
     args:
-      - build
-      - gcr.io/$PROJECT_ID/github.com/doctorquesero/eastern-busway-digital-permit-1.01:$COMMIT_SHA
-      - --builder
-      - gcr.io/buildpacks/builder:v1
-      - --path
-      - cx-login
+      [
+        'build',
+        '-t',
+        'gcr.io/$PROJECT_ID/github.com/doctorquesero/eastern-busway-digital-permit-1.01:$COMMIT_SHA',
+        '.'
+      ]
+    dir: 'cx-login'
+
+images:
+  - 'gcr.io/$PROJECT_ID/github.com/doctorquesero/eastern-busway-digital-permit-1.01:$COMMIT_SHA'
+
 options:
   logging: CLOUD_LOGGING_ONLY
