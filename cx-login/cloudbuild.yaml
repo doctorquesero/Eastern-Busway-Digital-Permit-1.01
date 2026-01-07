@@ -1,0 +1,12 @@
+steps:
+  - name: gcr.io/buildpacks/builder
+    entrypoint: pack
+    args:
+      - build
+      - gcr.io/$PROJECT_ID/github.com/doctorquesero/eastern-busway-digital-permit-1.01:$COMMIT_SHA
+      - --builder
+      - gcr.io/buildpacks/builder
+      - --path
+      - cx-login
+options:
+  logging: CLOUD_LOGGING_ONLY
