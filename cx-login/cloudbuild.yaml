@@ -1,11 +1,10 @@
 steps:
-  - name: gcr.io/buildpacks/builder
-    entrypoint: pack
+  - name: gcr.io/k8s-skaffold/pack
     args:
       - build
       - gcr.io/$PROJECT_ID/github.com/doctorquesero/eastern-busway-digital-permit-1.01:$COMMIT_SHA
       - --builder
-      - gcr.io/buildpacks/builder
+      - gcr.io/buildpacks/builder:v1
       - --path
       - cx-login
 options:
