@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { ShieldCheck, LogOut } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import NewPermit from './pages/NewPermit';
 import PermitDetail from './pages/PermitDetail';
+import ConnectCX from './pages/ConnectCX'; // 👈 Asegúrate de que este archivo exista
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
@@ -22,8 +23,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               <div className="flex items-baseline space-x-4">
                 <button className="text-brand-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Help</button>
                 <div className="flex items-center space-x-2 text-sm bg-brand-900 px-3 py-1 rounded-full">
-                    <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-                    <span>Online</span>
+                  <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                  <span>Online</span>
                 </div>
               </div>
             </div>
@@ -38,45 +39,44 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 };
 
 const AppContent: React.FC = () => {
-    const navigate = useNavigate();
+  const navigate = useNavigate();
 
-    return (
-        <Layout>
-            <Routes>
-                <Route path="/" element={
-                    <Dashboard 
-                        onCreateNew={() => navigate('/new')} 
-                        onViewPermit={(id) => navigate(`/permit/${id}`)}
-                    />
-                } />
-                <Route path="/new" element={
-                    <NewPermit 
-                        onCancel={() => navigate('/')}
-                        onComplete={() => navigate('/')}
-                    />
-                } />
-                <Route path="/permit/:id" element={
-                    <PermitDetailContainer />
-                } />
-                <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-        </Layout>
-    );
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={
+          <Dashboard
+            onCreateNew={() => navigate('/new')}
+            onViewPermit={(id) => navigate(`/permit/${id}`)}
+          />
+        } />
+        <Route path="/new" element={
+          <NewPermit
+            onCancel={() => navigate('/')}
+            onComplete={() => navigate('/')}
+          />
+        } />
+        <Route path="/permit/:id" element={<PermitDetailContainer />} />
+        <Route path="/connect-cx" element={<ConnectCX />} /> {/* 👈 Nueva ruta */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Layout>
+  );
 };
 
 // Wrapper to handle params
 const PermitDetailContainer = () => {
-    const location = useLocation();
-    const navigate = useNavigate();
-    const id = location.pathname.split('/').pop() || '';
-    
-    return <PermitDetail id={id} onBack={() => navigate('/')} />;
-}
+  const location = useLocation();
+  const navigate = useNavigate();
+  const id = location.pathname.split('/').pop() || '';
+
+  return <PermitDetail id={id} onBack={() => navigate('/')} />;
+};
 
 const App: React.FC = () => {
   return (
     <HashRouter>
-        <AppContent />
+      <AppContent />
     </HashRouter>
   );
 };
