@@ -1,15 +1,12 @@
 steps:
-  - name: 'gcr.io/cloud-builders/npm'
-    dir: 'cx-login'
-    args: ['install']
-
   - name: 'gcr.io/cloud-builders/docker'
-    dir: 'cx-login'
     args:
       [
         'build',
         '-t',
         'gcr.io/$PROJECT_ID/cx-login:$COMMIT_SHA',
+        '-f',
+        'cx-login/Dockerfile',
         '.'
       ]
 
