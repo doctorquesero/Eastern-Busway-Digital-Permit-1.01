@@ -2,10 +2,13 @@ FROM node:22
 
 WORKDIR /app
 
-COPY package*.json ./
+# Copiar solo los archivos del backend
+COPY cx-login/package*.json ./
+
 RUN npm install
 
-COPY . .
+# Copiar el resto del backend
+COPY cx-login/. .
 
 ENV PORT=8080
 EXPOSE 8080
