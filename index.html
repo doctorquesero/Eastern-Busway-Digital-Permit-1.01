@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eastern Busway Digital Permits</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: '#f0f9ff',
+                100: '#e0f2fe',
+                500: '#0ea5e9',
+                600: '#0284c7',
+                700: '#0369a1',
+                800: '#075985',
+                900: '#0c4a6e',
+              },
+              safety: {
+                yellow: '#fbbf24',
+                orange: '#f97316',
+                red: '#ef4444',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @media print {
+        @page {
+          margin: 10mm;
+          size: auto;
+        }
+        
+        body, #root, main {
+          height: auto !important;
+          min-height: auto !important;
+          overflow: visible !important;
+          background-color: white !important;
+          color: black !important;
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+
+        .no-print {
+          display: none !important;
+        }
+
+        .page-break {
+          page-break-before: always;
+          break-before: page;
+          display: block;
+          height: 1px;
+        }
+
+        /* Force hidden tabs to show during print */
+        .print-force-show {
+          display: block !important;
+          visibility: visible !important;
+          height: auto !important;
+          opacity: 1 !important;
+        }
+
+        .break-inside-avoid {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        
+        /* Reset shadows and borders for cleaner print */
+        * {
+          box-shadow: none !important;
+          text-shadow: none !important;
+        }
+        
+        /* Ensure inputs look like text */
+        input[type="text"], textarea {
+          border: none !important;
+          background: transparent !important;
+          resize: none;
+        }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
+    "react-router-dom": "https://aistudiocdn.com/react-router-dom@^7.10.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-50 text-gray-900">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

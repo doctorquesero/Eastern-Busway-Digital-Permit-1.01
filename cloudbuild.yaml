@@ -1,0 +1,36 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t',
+        'gcr.io/$PROJECT_ID/cx-login:$COMMIT_SHA',
+        '-f',
+        'cx-login/Dockerfile',
+        'cx-login'
+      ]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/cx-login:$COMMIT_SHA']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      [
+        'run',
+        'deploy',
+        'cx-login',
+        '--image',
+        'gcr.io/$PROJECT_ID/cx-login:$COMMIT_SHA',
+        '--region',
+        'australia-southeast1',
+        '--platform',
+        'managed',
+        '--allow-unauthenticated'
+      ]
+
+images:
+  - 'gcr.io/$PROJECT_ID/cx-login:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
