@@ -1,14 +1,17 @@
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+
 // 🚀 DIRECCIÓN INTELIGENTE: Usamos Firebase Cloud Functions en Producción
 const API_BASE = import.meta.env.DEV ? "/cxR/api" : "https://us-central1-eba-digital-permits.cloudfunctions.net";
 const API_KEY = import.meta.env.VITE_API_KEY || 'eba-secret-key-2024';
-const PROJECT_CODE = "EB-DEMO";
 
 let currentRole = localStorage.getItem('cx_current_role') || "";
 let currentUserEmail = localStorage.getItem('cx_current_email') || "";
+let currentProjectCode = localStorage.getItem('cx_project_code') || "EB-DEMO";
 
 export const getUserRole = () => currentRole;
 export const getCurrentUserEmail = () => currentUserEmail;
-
+export const getProjectCode = () => currentProjectCode;
 export const hasActiveSession = () => currentUserEmail.length > 0;
 
 export const authenticateCX = async (email?: string, password?: string) => {
@@ -21,36 +24,51 @@ export const logoutCX = () => {
     currentUserEmail = "";
     localStorage.removeItem('cx_current_role');
     localStorage.removeItem('cx_current_email');
-    localStorage.removeItem('cxSessionKey'); // Limpiamos la llave dinámica de iTwoCX al salir
+    localStorage.removeItem('cxSessionKey');
     console.log("🛑 LOCAL AND CX SESSION CLOSED");
 };
 
 // ============================================================================
-// 🛡️ LISTAS OFICIALES DE CONTROL DE ACCESO 
+// 🧠 ASIGNACIÓN DE ROLES DINÁMICA (DESDE FIREBASE)
 // ============================================================================
-const MASTER_USERS = ['dietrich.truchsess', 'dietrich', 'eba-dt'];
-const ISSUER_USERS = ['dietrich.truchsess', 'david.richmond', 'tommy.temple', 'krishna.nand', 'matt.grohn', 'michael.nicol', 'rangi.williams', 'ricky.bennenbroek', 'liam.colmer'];
-const APPROVER_USERS = ['tommy.temple', 'krishna.nand', 'michael.nicol', 'cain.simpson', 'approver'];
-const RECEIVER_USERS = ['david.richmond', 'rangi.williams', 'ricky.bennenbroek', 'will.ariki', 'ravinesh.ratnam', 'cameron.ellet', 'sudip.basnet', 'arepa.turua', 'barrie.hardfield', 'thisura.nissanka', 'krishhneel.kumar', 'sara.hall', 'darcy.hall'];
-
-// ============================================================================
-// 🧠 ASIGNACIÓN DE ROLES
-// ============================================================================
-export const assignUserRoleByEmail = (email: string): string => {
+export const assignUserRoleByEmail = async (email: string): Promise<string> => {
     const loginId = email.toLowerCase();
-    let assignedRoles: string[] = [];
+    let assignedRole = "Site Engineer"; // Rol por defecto si no está en la lista
+    
+    try {
+        const docRef = doc(db, 'appSettings', 'global');
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            
+            // Actualizar Project Code global
+            if (data.projectCode) {
+                currentProjectCode = data.projectCode;
+                localStorage.setItem('cx_project_code', data.projectCode);
+            }
 
-    if (MASTER_USERS.some(u => loginId.includes(u))) assignedRoles.push("Master");
-    if (ISSUER_USERS.some(u => loginId.includes(u))) assignedRoles.push("Issuer");
-    if (APPROVER_USERS.some(u => loginId.includes(u))) assignedRoles.push("Approver");
-    if (RECEIVER_USERS.some(u => loginId.includes(u))) assignedRoles.push("Receiver");
-
-    if (assignedRoles.length === 0) {
-        currentRole = "Site Engineer";
-    } else {
-        currentRole = assignedRoles.join(",");
+            // Buscar rol
+            const roles: {email: string, role: string}[] = data.roleAssignments || [];
+            const userMatch = roles.find(u => loginId.includes(u.email.toLowerCase()));
+            
+            if (userMatch) {
+                assignedRole = userMatch.role;
+            }
+        } else {
+            // Failsafe por si la DB está vacía: Dietrich siempre es Master
+            if (loginId.includes('dietrich') || loginId.includes('eba-dt')) {
+                assignedRole = "Master";
+            }
+        }
+    } catch (error) {
+        console.error("Error fetching roles from cloud:", error);
+        if (loginId.includes('dietrich') || loginId.includes('eba-dt')) {
+            assignedRole = "Master";
+        }
     }
 
+    currentRole = assignedRole;
     currentUserEmail = loginId;
     localStorage.setItem('cx_current_role', currentRole);
     localStorage.setItem('cx_current_email', loginId);
@@ -62,7 +80,6 @@ export const assignUserRoleByEmail = (email: string): string => {
 // ☁️ FUNCIONES DE SINCRONIZACIÓN CON iTwoCX 
 // ============================================================================
 
-// 🚀 EL CORAZÓN DE LA SEGURIDAD NATIVA: Obtenemos la llave dinámica
 export const getActiveSessionKey = () => {
     const key = localStorage.getItem('cxSessionKey');
     if (!key) {
@@ -72,22 +89,23 @@ export const getActiveSessionKey = () => {
 };
 
 const findPermitInCX = async (num: string) => {
-    const exactRef = encodeURIComponent(num);
-    const sessionKey = getActiveSessionKey(); // Obtenemos la llave fresca
+    const paddedNum = num.padStart(4, '0');
+    const exactRef = encodeURIComponent(paddedNum);
+    const sessionKey = getActiveSessionKey();
 
-    if (!sessionKey) return null; // Abortamos si no hay llave
+    if (!sessionKey) return null;
 
     try {
         const url = import.meta.env.DEV
-            ? `/cxR/Api/${PROJECT_CODE}/Document/GetByReference/${exactRef}`
-            : `${API_BASE}/cxGetByReference?projectCode=${PROJECT_CODE}&reference=${exactRef}`;
+            ? `/cxR/Api/${currentProjectCode}/Document/GetByReference/${exactRef}`
+            : `${API_BASE}/cxGetByReference?projectCode=${currentProjectCode}&reference=${exactRef}`;
 
         let res = await fetch(url, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
                 'x-api-key': API_KEY,
-                'x-cx-session-key': sessionKey // 💉 INYECTAMOS LA LLAVE AL BACKEND
+                'x-cx-session-key': sessionKey
             },
         });
 
@@ -109,13 +127,15 @@ export const issuePermitToCX = async (permit: any) => {
         const num = rawNumber.replace(/\D/g, "");
         if (!num) throw new Error("El permiso no tiene un número PF válido.");
 
-        const sessionKey = getActiveSessionKey(); // Obtenemos la llave fresca
+        const sessionKey = getActiveSessionKey();
         if (!sessionKey) throw new Error("Acceso denegado: No tienes una sesión activa de iTwoCX.");
 
-        console.log(`Emitiendo permiso PF#${num} a status 'Issued'...`);
+        const paddedNum = num.padStart(4, '0');
+        console.log(`Emitiendo permiso PF#${paddedNum} a status 'Issued'...`);
+        
         const targetUrl = import.meta.env.DEV
-            ? `/cxR/Api/${PROJECT_CODE}/Document/Update`
-            : `${API_BASE}/cxIssuePermit?projectCode=${PROJECT_CODE}&reference=${encodeURIComponent(num)}`;
+            ? `/cxR/Api/${currentProjectCode}/Document/Update`
+            : `${API_BASE}/cxIssuePermit?projectCode=${currentProjectCode}&reference=${encodeURIComponent(paddedNum)}`;
 
         const fetchMethod = import.meta.env.DEV ? 'PUT' : 'POST';
 
@@ -124,7 +144,7 @@ export const issuePermitToCX = async (permit: any) => {
             headers: {
                 'Content-Type': 'application/json',
                 'x-api-key': API_KEY,
-                'x-cx-session-key': sessionKey 
+                'x-cx-session-key': sessionKey
             }
         };
 
@@ -157,38 +177,31 @@ export const submitPermitToCX = async (permit: any, customFilename?: string) => 
         const num = rawNumber.replace(/\D/g, "");
         if (!num) throw new Error("El permiso no tiene un número PF válido.");
 
-        // Obtenemos el ID interno del documento
         let cxDoc = await findPermitInCX(num);
-        if (!cxDoc) throw new Error(`El Permiso PF#${num} no fue encontrado en la base de datos de iTwoCX.`);
+        if (!cxDoc) throw new Error(`El Permiso PF#${num.padStart(4, '0')} no fue encontrado en la base de datos de iTwoCX.`);
 
         let realCxId = cxDoc.Id;
         let needsUpdate = false;
-        const sessionKey = getActiveSessionKey(); 
+        const sessionKey = getActiveSessionKey();
 
         if (!sessionKey) throw new Error("Acceso denegado: No tienes una sesión activa de iTwoCX.");
 
-        // =================================================================
-        // FASE 1: SUBIR EL PDF COMO ATTACHMENT INDEPENDIENTE
-        // =================================================================
+        // FASE 1: SUBIR EL PDF COMO ATTACHMENT
         if (permit.issuerSignature?.data?.startsWith('data:application/pdf')) {
             const base64Content = permit.issuerSignature.data.split(',')[1];
-            const fileName = customFilename || `Unified_Permit_${num}_${new Date().getTime()}.pdf`;
+            const paddedNum = num.padStart(4, '0');
+            const fileName = customFilename || `Unified_Permit_${paddedNum}_${new Date().getTime()}.pdf`;
 
-            console.log(`Fase 1: Subiendo PDF (${fileName}) a CX para el documento ID: ${realCxId}...`);
-            
+            console.log(`Fase 1: Subiendo PDF (${fileName}) a CX...`);
+
             const uploadUrl = import.meta.env.DEV
-                ? `/cxR/Api/${PROJECT_CODE}/Attachment/Upload?documentId=${realCxId}`
-                : `${API_BASE}/cxUploadAttachment?projectCode=${PROJECT_CODE}&documentId=${realCxId}`;
+                ? `/cxR/Api/${currentProjectCode}/Attachment/Upload?documentId=${realCxId}`
+                : `${API_BASE}/cxUploadAttachment?projectCode=${currentProjectCode}&documentId=${realCxId}`;
 
-            const uploadPayload = {
-                Name: fileName,
-                ChunkId: 1,
-                ChunkTotal: 1,
-                Content: base64Content
-            };
+            const uploadPayload = { Name: fileName, ChunkId: 1, ChunkTotal: 1, Content: base64Content };
 
             const uploadRes = await fetch(uploadUrl, {
-                method: 'POST', // Siempre POST para Uploads según Swagger
+                method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'x-api-key': API_KEY,
@@ -199,27 +212,22 @@ export const submitPermitToCX = async (permit: any, customFilename?: string) => 
 
             if (!uploadRes.ok) {
                 const errText = await uploadRes.text();
-                console.error("Fallo al subir el PDF:", errText);
                 throw new Error(`Fallo al adjuntar el PDF a iTwoCX. Detalles: ${errText}`);
             }
-            console.log("PDF adjuntado exitosamente en iTwoCX.");
         }
 
-        // =================================================================
-        // FASE 2: ACTUALIZAR EL ESTADO DEL DOCUMENTO
-        // =================================================================
+        // FASE 2: ACTUALIZAR EL ESTADO
         if (permit.status === 'closed') {
-            const isCancelled = permit.ceaseWorksRecord && permit.ceaseWorksRecord.actionTaken === 'cancelled';
-            cxDoc.StatusName = isCancelled ? "Cancelled" : "Closed";
+            cxDoc.StatusName = "Closed";
             needsUpdate = true;
         }
 
         if (needsUpdate) {
             console.log(`Fase 2: Intentando cambiar estado a: ${cxDoc.StatusName}`);
-            
+
             const targetUrl = import.meta.env.DEV
-                ? `/cxR/Api/${PROJECT_CODE}/Document/Update`
-                : `${API_BASE}/cxChangeStatus?projectCode=${PROJECT_CODE}`;
+                ? `/cxR/Api/${currentProjectCode}/Document/Update`
+                : `${API_BASE}/cxChangeStatus?projectCode=${currentProjectCode}`;
 
             const fetchMethod = import.meta.env.DEV ? 'PUT' : 'POST';
 
@@ -228,17 +236,15 @@ export const submitPermitToCX = async (permit: any, customFilename?: string) => 
                 headers: {
                     'Content-Type': 'application/json',
                     'x-api-key': API_KEY,
-                    'x-cx-session-key': sessionKey // 💉 INYECTAMOS LA LLAVE AL BACKEND
+                    'x-cx-session-key': sessionKey
                 },
                 body: JSON.stringify(cxDoc)
             });
 
             if (!updateRes.ok) {
                 const errorText = await updateRes.text();
-                console.error("Rechazo de iTwoCX:", errorText);
                 throw new Error(`iTwoCX rechazó el cambio. Detalles: ${errorText}`);
             }
-            console.log("Estado actualizado y documento sincronizado en CX correctamente.");
             return { success: true, internalId: realCxId, message: `🎉 SUCCESS!\n\nPermiso cerrado y PDF inyectado en iTwoCX.` };
         } else {
             return { success: true, internalId: realCxId, message: `Permiso PF#${num} sincronizado sin cambios.` };

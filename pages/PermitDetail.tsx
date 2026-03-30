@@ -123,7 +123,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         syncToFirebase({ ...permit, [listName]: updatedList } as Permit);
     };
 
-    // 🚀 EMISIÓN - MODO FANTASMA (Failover Silencioso)
     const handleIssuePermit = async () => {
         if (!permit.siteEngineerSignature || !permit.receiverSignature || !permit.issuerSignature) {
             alert("🛑 CANNOT ISSUE:\n\nEngineer, Receiver, and Issuer signatures are required before issuing to the field."); return;
@@ -183,7 +182,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setHandoverReceiver(''); setHandoverSignature(null); setHandoverChecks({});
     };
 
-    // 🚀 CIERRE - MODO FANTASMA Y RESPALDO AUTOMÁTICO DE PDF
     const handleAutomatedCloseAndLodge = async () => {
         if (isExecutionBlocked) { alert("🛑 ERROR: The permit cannot be closed because Part B has not been approved by the Permit Approver."); return; }
         let errors = [];
@@ -220,7 +218,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                 const rawNumber = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || "").replace(/\D/g, "");
                 const pdfBase64 = pdf.output('datauristring').split(',')[1];
 
-                // 🚀 NUEVO: GUARDAR PDF FÍSICO EN LA BÓVEDA DE FIREBASE STORAGE COMO PLAN B
                 try {
                     const storage = getStorage();
                     const pdfRef = ref(storage, `pdf_backups/PF${rawNumber}_${new Date().getTime()}.pdf`);
@@ -232,7 +229,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     console.error("Backup PDF Error (Silent):", storageError);
                 }
                 
-                // Intento de envío a CX
                 try {
                     await submitPermitToCX({ ...updatedPermit, itwocxNumber: rawNumber, issuerSignature: { data: `data:application/pdf;base64,${pdfBase64}` } }, `EB_Permit_PF${rawNumber}_${new Date().getTime()}.pdf`);
                     await syncToFirebase({ ...updatedPermit, cxSyncPending: null, cxSyncError: null } as any);
@@ -261,19 +257,97 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         } catch (err) { alert("Error uploading photo to cloud."); } finally { setIsUploadingPhoto(false); e.target.value = ''; }
     };
 
+    // 🚀 FIXED: CEASE WORKS EMERGENCY CLOSURE - USANDO TÉRMINOS SEGUROS
     const handleCeaseWorksSave = async (sig: Signature) => {
         if (isClosed || !permit || !ceaseItem || !ceaseAction || !ceaseIssuerName) { alert("Fill all fields."); return; }
-        const newRecord: CeaseWorksRecord = { id: crypto.randomUUID(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
-        let updated = { ...permit, ceaseWorksRecord: newRecord };
-        if (ceaseAction === 'cancelled') { updated.status = 'closed'; updated.closureDate = new Date().toISOString(); updated.closureReceiverName = `FORCE CLOSED (${ceaseIssuerName})`; }
-        await syncToFirebase(updated);
-        setCeaseItem(''); setCeaseAction(''); setCeaseIssuerName(''); 
-        if (ceaseAction === 'cancelled') alert("Permit cancelled permanently.");
+
+        const isConfirmed = confirm("🚨 EXECUTING CEASE WORKS PROTOCOL\n\nIf you proceed, this permit will be permanently locked and synchronized with iTwoCX as CLOSED. The reasons for the stoppage will be permanently attached. Do you wish to proceed?");
+        if (!isConfirmed) return;
+
+        setIsSubmitting(true);
+        try {
+            const newRecord: CeaseWorksRecord = { id: crypto.randomUUID(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
+            let updatedPermit = { ...permit, ceaseWorksRecord: newRecord };
+
+            if (ceaseAction === 'cancelled') { 
+                // 🧠 Diccionario de razones
+                const ceaseReasons: Record<string, string> = {
+                    '1': "Unidentified service or archaeological items encountered (Strike).",
+                    '2': "Methodology or site conditions changed.",
+                    '3': "Change in foreman, excavator operator or spotter.",
+                    '4': "Asbestos or other contaminates encountered."
+                };
+                const reasonText = ceaseReasons[ceaseItem] || "Emergency Protocol Triggered";
+
+                // 🚨 Términos seguros ("CLOSED", "EMERGENCY CLOSED") que no alteran el WAF
+                updatedPermit.status = 'closed'; 
+                updatedPermit.closureDate = new Date().toISOString(); 
+                updatedPermit.closureReceiverName = `EMERGENCY CLOSED (${ceaseIssuerName})`;
+                updatedPermit.closureSignature = sig; 
+                
+                updatedPermit.closureChecklistExcavationSafe = false;
+                updatedPermit.closureChecklistOutstandingWorks = true;
+                updatedPermit.closureOutstandingWorksDetails = `🚨 PERMIT CLOSED DUE TO CEASE WORKS PROTOCOL.\nReason: ${reasonText}`;
+                
+                updatedPermit.otherNotes = (updatedPermit.otherNotes || '') + `\n\n🚨 EMERGENCY CLOSED VIA CEASE WORKS PROTOCOL by ${ceaseIssuerName}. Reason: ${reasonText}`;
+            }
+            
+            await syncToFirebase(updatedPermit as Permit);
+
+            // 🚀 SINCRONIZACIÓN AUTOMÁTICA CON CX (Con alertas correctas)
+            if (ceaseAction === 'cancelled') {
+                if (pdfExportRef.current) {
+                    await new Promise(resolve => setTimeout(resolve, 800)); 
+                    const pages = pdfExportRef.current.querySelectorAll('.pdf-page');
+                    const pdf = new jsPDF('p', 'mm', 'a4');
+                    for (let i = 0; i < pages.length; i++) {
+                        if (i > 0) pdf.addPage();
+                        const canvas = await html2canvas(pages[i] as HTMLElement, { scale: 2, useCORS: true, logging: false, backgroundColor: "#ffffff" });
+                        pdf.addImage(canvas.toDataURL('image/jpeg', 0.8), 'JPEG', 0, 0, 210, 297);
+                    }
+                    const rawNumber = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || "").replace(/\D/g, "");
+                    const pdfBase64 = pdf.output('datauristring').split(',')[1];
+
+                    // Backup PDF to Storage
+                    try {
+                        const storage = getStorage();
+                        const pdfRef = ref(storage, `pdf_backups/PF${rawNumber}_EMERGENCY_CLOSED_${new Date().getTime()}.pdf`);
+                        await uploadString(pdfRef, pdfBase64, 'base64', { contentType: 'application/pdf' });
+                        const downloadUrl = await getDownloadURL(pdfRef);
+                        updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl } as any;
+                        await syncToFirebase(updatedPermit as Permit);
+                    } catch (storageError) {
+                        console.error("Backup PDF Error (Silent):", storageError);
+                    }
+                    
+                    // Submit to CX
+                    try {
+                        await submitPermitToCX({ ...updatedPermit, itwocxNumber: rawNumber, issuerSignature: { data: `data:application/pdf;base64,${pdfBase64}` } }, `EB_Permit_PF${rawNumber}_EMERGENCY_CLOSED_${new Date().getTime()}.pdf`);
+                        await syncToFirebase({ ...updatedPermit, cxSyncPending: null, cxSyncError: null } as any);
+                        
+                        // 🟢 Cartel de éxito AHORA SÍ solo sale si no hay error
+                        alert("🚨 PROTOCOL COMPLETE: Permit gracefully Closed and Synchronized with iTwoCX.");
+                    } catch (cxError: any) {
+                        console.error("CX Lodge Error:", cxError);
+                        await syncToFirebase({ ...updatedPermit, cxSyncPending: 'closure', cxSyncError: cxError.message } as any);
+                        
+                        // 🔴 Cartel de alerta si falla el firewall
+                        alert(`⚠️ ALERT: Permit was saved locally, but CX Sync Failed.\n\nError: ${cxError.message}`);
+                    }
+                }
+            } else {
+                alert("Cease Works record updated (Suspended).");
+                setCeaseItem(''); setCeaseAction(''); setCeaseIssuerName(''); 
+            }
+        } catch (error: any) {
+            alert(`⚠️ PROTOCOL FAILED:\n${error.message}`); 
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     return (
         <>
-            {/* 🚀 PANTALLA DE CARGA GIGANTE (OVERLAY) */}
             {isSubmitting && (
                 <div className="fixed inset-0 z-[9999] bg-gray-900/90 backdrop-blur-sm flex flex-col items-center justify-center text-white px-4">
                     <Loader2 size={80} className="animate-spin text-blue-500 mb-6" />
@@ -299,7 +373,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     </div>
                 </div>
 
-                {/* 🚀 ALERTA DE MODO FANTASMA: Solo visible para el Master */}
                 {isMaster && (permit as any).cxSyncPending && (
                     <div className="bg-amber-100 border-l-4 border-amber-500 text-amber-800 p-3 mt-4 text-sm font-bold flex justify-between items-center gap-2 shadow-inner">
                         <div className="flex items-center gap-2">
@@ -311,7 +384,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                 {isExecutionBlocked && <div className="bg-amber-100 text-amber-800 p-4 text-center font-black uppercase tracking-widest border-b-4 border-amber-300 mt-4">⚠️ Mechanical Work Pending. Awaiting Permit Approver to sign Part B.</div>}
 
-                {/* THE TABS SYSTEM */}
                 <div className="flex border-b-4 border-gray-100 bg-white sticky top-0 z-40 shadow-sm overflow-x-auto hide-scrollbar mt-4">
                     <button onClick={() => setActiveTab('engineer')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'engineer' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Engineer {isIssued && <Lock size={12}/>}</button>
                     <button onClick={() => setActiveTab('receiver_checklist')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'receiver_checklist' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Receiver Checklist {isIssued && <Lock size={12}/>}</button>
@@ -331,7 +403,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                 <div className="bg-white shadow-xl border p-4 md:p-8 min-h-[600px] relative">
                     
-                    {/* ENGINEER PANE */}
                     <div className={activeTab === 'engineer' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Engineer (Part A)</h3>
@@ -378,7 +449,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         </div>
                     </div>
 
-                    {/* RECEIVER CHECKLIST PANE */}
                     <div className={activeTab === 'receiver_checklist' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Receiver Checklist</h3>
@@ -408,7 +478,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         )}
                     </div>
 
-                    {/* ISSUER PANE */}
                     <div className={activeTab === 'issuer' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Issuer Final Checks</h3>
@@ -458,7 +527,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         </div>
                     </div>
 
-                    {/* APPROVER PANE */}
                     {!isHydro && (
                         <div className={activeTab === 'approver' ? 'block animate-fade-in' : 'hidden'}>
                             <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
@@ -494,7 +562,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         </div>
                     )}
 
-                    {/* CREW REGISTRATION PANE */}
                     <div className={activeTab === 'crew' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Crew Registration</h3>
@@ -512,7 +579,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         </div>
                     </div>
 
-                    {/* DAILY SIGN ON PANE */}
                     <div className={activeTab === 'daily' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Daily Sign On</h3>
@@ -531,7 +597,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         </div>
                     </div>
 
-                    {/* HANDOVERS PANE */}
                     <div className={activeTab === 'handover' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Handovers (Shift Change)</h3>
@@ -557,7 +622,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         </tbody></table></div></div>
                     </div>
 
-                    {/* PHOTOS PANE */}
                     <div className={activeTab === 'photos' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Photographic Evidence</h3>
@@ -576,7 +640,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         )}
                     </div>
 
-                    {/* NOTES PANE & STRIKES */}
                     <div className={activeTab === 'notes' ? 'block animate-fade-in' : 'hidden'}>
                         <div className="mt-4 bg-red-50 border-4 border-red-600 p-8 rounded-[2rem] shadow-inner mb-10 animate-fade-in relative">
                             <h3 className="font-black text-2xl mb-6 text-red-700 uppercase flex items-center gap-3 tracking-tighter"><AlertTriangle size={32} className="shrink-0"/> CEASE WORKS PROTOCOL (Pg 7)</h3>
@@ -609,7 +672,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         {!isClosed && <button onClick={() => { syncToFirebase({...permit, otherNotes} as Permit); alert("Notes saved successfully."); }} className="bg-blue-800 hover:bg-blue-900 text-white px-8 py-3 rounded-xl font-black text-xs uppercase shadow-md transition-all hover:scale-[1.02]">Save Notes</button>}
                     </div>
 
-                    {/* CLOSURE PANE */}
                     <div className={activeTab === 'closure' ? 'block animate-fade-in' : 'hidden'}>
                         {isClosed ? (
                             <div className="bg-red-600 p-12 rounded-[3rem] text-center text-white shadow-inner animate-fade-in">

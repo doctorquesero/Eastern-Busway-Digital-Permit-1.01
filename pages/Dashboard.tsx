@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, doc, deleteDoc } from 'firebase/firestore'; 
 import { db } from '../firebase'; 
-import { RefreshCw, Loader2, Trash2, AlertTriangle, ShieldAlert } from 'lucide-react'; 
+import { RefreshCw, Loader2, Trash2, ShieldAlert } from 'lucide-react'; 
 import { getCurrentUserEmail } from '../services/cx';
 
 const permitCategories = [
@@ -42,7 +42,6 @@ export const Dashboard = () => {
         permitsFromCloud.push(doc.data());
       });
 
-      // 🚀 EL FIX: GUARDAMOS ESTRICTAMENTE COMO ARRAY (LISTA)
       if (permitsFromCloud.length > 0) {
         localStorage.setItem('eba_permits_db_v3', JSON.stringify(permitsFromCloud));
       }
@@ -68,8 +67,9 @@ export const Dashboard = () => {
   }, []);
 
   const handleCategoryClick = (code: string) => {
+    // 🚀 MODIFICADO: Solo Breaking Ground va al form. El resto va a Under Construction.
     if (code === 'EX') navigate('/new');
-    else navigate('/construction');
+    else navigate('/under-construction');
   };
 
   const requestDeletion = (id: string, permitNum: string) => {
@@ -141,7 +141,8 @@ export const Dashboard = () => {
         
         <div className="flex justify-between items-end">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Project Command Center</h1>
+            {/* 🚀 MODIFICADO: Título cambiado */}
+            <h1 className="text-3xl font-bold text-gray-900">Work Permits Dashboard</h1>
             <p className="text-gray-500 mt-1">Safety Intelligence & Permit Overview</p>
           </div>
           <button 
@@ -169,28 +170,8 @@ export const Dashboard = () => {
           </div>
         </div>
 
+        {/* 🚀 MODIFICADO: Cloud Synced Permits subió de posición */}
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-2">Permit Action Center</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {permitCategories.map((permit) => {
-              const isActive = permit.code === 'EX';
-              return (
-                <div 
-                  key={permit.code} 
-                  onClick={() => handleCategoryClick(permit.code)}
-                  className={`bg-white rounded-xl shadow-sm border ${permit.border} p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${
-                    isActive ? 'hover:shadow-md hover:border-brand-500 hover:ring-1 hover:ring-brand-500' : 'opacity-70 hover:opacity-100 hover:bg-gray-50'
-                  }`}
-                >
-                  <span className={`text-4xl p-4 rounded-full mb-4 ${permit.color}`}>{permit.icon}</span>
-                  <h3 className="font-bold text-gray-800 text-lg">{permit.name}</h3>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="mt-12">
           <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-2">Cloud Synced Permits</h2>
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
@@ -237,6 +218,26 @@ export const Dashboard = () => {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        {/* 🚀 MODIFICADO: Permit Action Center bajó de posición */}
+        <div className="mt-12">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-2">Permit Action Center</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {permitCategories.map((permit) => {
+              const isActive = permit.code === 'EX';
+              return (
+                <div 
+                  key={permit.code} 
+                  onClick={() => handleCategoryClick(permit.code)}
+                  className={`bg-white rounded-xl shadow-sm border ${permit.border} p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 hover:shadow-md hover:border-brand-500 hover:ring-1 hover:ring-brand-500`}
+                >
+                  <span className={`text-4xl p-4 rounded-full mb-4 ${permit.color}`}>{permit.icon}</span>
+                  <h3 className="font-bold text-gray-800 text-lg">{permit.name}</h3>
+                </div>
+              );
+            })}
           </div>
         </div>
 

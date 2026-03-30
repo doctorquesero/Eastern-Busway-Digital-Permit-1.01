@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { LogIn, X, Loader2, UserPlus } from 'lucide-react';
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { assignUserRoleByEmail } from '../services/cx'; 
+import { LogIn, X, Loader2, UserPlus, KeyRound } from 'lucide-react';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
+import { assignUserRoleByEmail, getProjectCode } from '../services/cx'; 
 
 interface LoginModalProps {
     isOpen: boolean;
@@ -10,14 +10,12 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin }) => {
-    const [mode, setMode] = useState<'login' | 'signup'>('login');
+    const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-
-    // 🏗️ IMPORTANTE: Define aquí tu código de proyecto oficial de CX
-    const PROJECT_CODE = 'EB-DEMO'; 
+    const [message, setMessage] = useState<string | null>(null); 
 
     if (!isOpen) return null;
 
@@ -25,19 +23,27 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
         e.preventDefault();
         setLoading(true);
         setError(null);
+        setMessage(null);
         
         try {
             const auth = getAuth();
             
+            if (mode === 'reset') {
+                await sendPasswordResetEmail(auth, email);
+                setMessage('A password reset link has been sent to your email.');
+                setLoading(false);
+                return; 
+            }
+
             if (mode === 'signup') {
-                // 1A. Crear cuenta nueva en Firebase
                 await createUserWithEmailAndPassword(auth, email, password);
             } else {
-                // 1B. Iniciar sesión en Firebase (Primera barrera)
                 await signInWithEmailAndPassword(auth, email, password);
             }
 
-            // 🚀 2. EL TRUCO DE MAGIA: Conexión Invisible a iTwoCX
+            // 🚀 AHORA EL PROJECT CODE VIENE DE LA BASE DE DATOS (VIA CACHÉ)
+            const activeProjectCode = getProjectCode();
+
             try {
                 const response = await fetch('https://us-central1-eba-digital-permits.cloudfunctions.net/cxLogin', {
                     method: 'POST',
@@ -45,7 +51,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                     body: JSON.stringify({ 
                         email: email, 
                         password: password, 
-                        projectCode: PROJECT_CODE 
+                        projectCode: activeProjectCode 
                     })
                 });
 
@@ -56,23 +62,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 }
 
                 if (data.IsSuccess && data.Key) {
-                    // 🔐 Guardamos la llave dinámica de CX en la memoria del navegador
                     localStorage.setItem('cxSessionKey', data.Key);
-                    console.log("✅ Llave maestra de CX obtenida y guardada exitosamente.");
                 } else {
                     throw new Error(data.ErrorMessages?.join(', ') || 'Credenciales de CX inválidas.');
                 }
 
             } catch (cxErr: any) {
                 console.error("⚠️ Error en la conexión invisible con CX:", cxErr);
-                // NOTA: Si quieres que el usuario NO pueda entrar a la app si CX falla,
-                // descomenta la siguiente línea. Por ahora, solo avisa en consola pero lo deja entrar
-                // para que pueda usar el Modo Fantasma/Offline.
-                // throw new Error("Credenciales válidas, pero iTwoCX rechazó la conexión. " + cxErr.message); 
             }
 
-            // 3. Asignación de rol local
-            const roleAssigned = assignUserRoleByEmail(email);
+            // 🚀 FIX: AHORA ESPERAMOS (AWAIT) A QUE LA BASE DE DATOS NOS DIGA EL ROL
+            const roleAssigned = await assignUserRoleByEmail(email);
             console.log(`Usuario autenticado en la plataforma como: ${roleAssigned}`);
             
             onLogin(email);
@@ -88,6 +88,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 setMode('login');
             } else if (err.code === 'auth/weak-password') {
                 setError('Password should be at least 6 characters.');
+            } else if (err.code === 'auth/invalid-email') {
+                setError('Please enter a valid email address.');
             } else {
                 setError(err.message || 'Authentication failed. Please try again.');
             }
@@ -100,29 +102,35 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
                 
-                <div className="flex border-b border-slate-800">
-                    <button 
-                        onClick={() => { setMode('login'); setError(null); }} 
-                        className={`flex-1 py-4 text-sm font-bold uppercase tracking-widest transition-colors ${mode === 'login' ? 'text-blue-500 border-b-2 border-blue-500 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`}
-                    >
-                        Sign In
-                    </button>
-                    <button 
-                        onClick={() => { setMode('signup'); setError(null); }} 
-                        className={`flex-1 py-4 text-sm font-bold uppercase tracking-widest transition-colors ${mode === 'signup' ? 'text-blue-500 border-b-2 border-blue-500 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`}
-                    >
-                        Register
-                    </button>
-                </div>
+                {mode !== 'reset' && (
+                    <div className="flex border-b border-slate-800">
+                        <button 
+                            onClick={() => { setMode('login'); setError(null); setMessage(null); }} 
+                            className={`flex-1 py-4 text-sm font-bold uppercase tracking-widest transition-colors ${mode === 'login' ? 'text-blue-500 border-b-2 border-blue-500 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            Sign In
+                        </button>
+                        <button 
+                            onClick={() => { setMode('signup'); setError(null); setMessage(null); }} 
+                            className={`flex-1 py-4 text-sm font-bold uppercase tracking-widest transition-colors ${mode === 'signup' ? 'text-blue-500 border-b-2 border-blue-500 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            Register
+                        </button>
+                    </div>
+                )}
 
                 <div className="p-6">
                     <div className="flex justify-between items-center mb-6">
                         <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center">
-                                {mode === 'login' ? <LogIn className="w-5 h-5 text-blue-500" /> : <UserPlus className="w-5 h-5 text-blue-500" />}
+                                {mode === 'login' ? <LogIn className="w-5 h-5 text-blue-500" /> : 
+                                 mode === 'signup' ? <UserPlus className="w-5 h-5 text-blue-500" /> :
+                                 <KeyRound className="w-5 h-5 text-blue-500" />}
                             </div>
                             <h2 className="text-xl font-bold text-white">
-                                {mode === 'login' ? 'EBA Digital Permits' : 'Create Account'}
+                                {mode === 'login' ? 'EBA Digital Permits' : 
+                                 mode === 'signup' ? 'Create Account' : 
+                                 'Reset Password'}
                             </h2>
                         </div>
                         <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors">
@@ -145,24 +153,42 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                             />
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                                Password {mode === 'signup' && '(Min. 6 characters)'}
-                            </label>
-                            <input
-                                type="password"
-                                required
-                                minLength={6}
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                                placeholder="••••••••"
-                            />
-                        </div>
+                        {mode !== 'reset' && (
+                            <div>
+                                <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                                    Password {mode === 'signup' && '(Min. 6 characters)'}
+                                </label>
+                                <input
+                                    type="password"
+                                    required
+                                    minLength={6}
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                                    placeholder="••••••••"
+                                />
+                                {mode === 'login' && (
+                                    <div className="flex justify-end mt-2">
+                                        <button 
+                                            type="button" 
+                                            onClick={() => { setMode('reset'); setError(null); setMessage(null); }} 
+                                            className="text-xs text-blue-400 hover:text-blue-300 font-medium transition-colors"
+                                        >
+                                            Forgot your password?
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {error && (
                             <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-xl text-sm leading-relaxed">
                                 {error}
+                            </div>
+                        )}
+                        {message && (
+                            <div className="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-xl text-sm leading-relaxed font-bold">
+                                {message}
                             </div>
                         )}
 
@@ -174,12 +200,26 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                             {loading ? (
                                 <>
                                     <Loader2 className="w-5 h-5 animate-spin" />
-                                    {mode === 'login' ? 'Authenticating with CX...' : 'Creating Profile...'}
+                                    {mode === 'login' ? 'Authenticating with CX...' : 
+                                     mode === 'signup' ? 'Creating Profile...' : 
+                                     'Sending link...'}
                                 </>
                             ) : (
-                                mode === 'login' ? 'Login securely' : 'Register & Continue'
+                                mode === 'login' ? 'Login securely' : 
+                                mode === 'signup' ? 'Register & Continue' :
+                                'Send Reset Link'
                             )}
                         </button>
+                        
+                        {mode === 'reset' && (
+                            <button 
+                                type="button" 
+                                onClick={() => { setMode('login'); setError(null); setMessage(null); }} 
+                                className="w-full mt-2 text-slate-400 hover:text-white text-sm font-medium transition-colors"
+                            >
+                                Back to Login
+                            </button>
+                        )}
                     </form>
 
                     <p className="mt-6 text-center text-xs text-slate-500">

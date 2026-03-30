@@ -13,7 +13,6 @@ const getBaseOptions = (sessionKey: string, method: string) => {
         "Accept": "application/json"
     };
 
-    // Solo inyectar la llave si existe, WebKnight bloquea cabeceras vacías
     if (sessionKey) {
         headers["Key"] = sessionKey;
     }
@@ -21,10 +20,11 @@ const getBaseOptions = (sessionKey: string, method: string) => {
     return { method, headers };
 };
 
-// Limpieza de referencia para evitar errores de codificación en la URL
+// Limpieza de referencia y auto-relleno de ceros (ej. '18' -> 'PF#0018')
 const formatRef = (ref: string) => {
     const cleanRef = String(ref).replace(/\D/g, '');
-    return `PF%23${cleanRef}`;
+    const paddedRef = cleanRef.padStart(4, '0'); // 🚀 FIX: Auto-completa con ceros a 4 dígitos
+    return `PF%23${paddedRef}`;
 };
 
 // Parseador seguro para evitar caídas si CX devuelve HTML
@@ -182,7 +182,6 @@ export const cxLogin = functions.https.onRequest((req, res) => {
                 return res.status(400).send({ error: "Missing email or password." });
             }
 
-            // PASO 1: EncryptPassword (Usando el modelo JSON estricto del manual)
             const encryptUrl = `${CX_API_BASE}/Login/EncryptPassword`;
             
             const encryptRes = await fetch(encryptUrl, {
@@ -191,7 +190,6 @@ export const cxLogin = functions.https.onRequest((req, res) => {
                     "Content-Type": "application/json",
                     "Accept": "application/json"
                 },
-                // 🚀 FIX: Enviamos el objeto JSON tal cual lo pide el "Model Example" del Swagger
                 body: JSON.stringify({ Password: password }) 
             });
 
@@ -207,7 +205,6 @@ export const cxLogin = functions.https.onRequest((req, res) => {
                  throw new Error(`[Encrypt API] Devuelve null o vacío. Revisa la contraseña.`);
             }
 
-            // PASO 2: ByEmail
             const loginUrl = `${CX_API_BASE}/Login/ByEmail`;
             const loginPayload = {
                 Email: email,
@@ -240,7 +237,7 @@ export const cxLogin = functions.https.onRequest((req, res) => {
 });
 
 // ============================================================================
-// 📧 MÓDULO DE ALERTAS Y VIGÍA DE FIREBASE
+// 📧 MÓDULO DE ALERTAS Y VIGÍA DE FIREBASE (CON AUTO-ADJUNTO DE PDF)
 // ============================================================================
 
 const transporter = nodemailer.createTransport({
@@ -250,6 +247,9 @@ const transporter = nodemailer.createTransport({
         pass: 'umuymnsyxqnnmshz'
     }
 });
+
+// 🚀 LISTA DE DISTRIBUCIÓN (Fácil de cambiar para el próximo Document Controller)
+const ALERT_EMAILS = 'dietrich.truchsess@easternbusway.nz'; 
 
 export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}', async (event: any) => {
     if (!event.data) return;
@@ -263,28 +263,54 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
         const errorMessage = newValue.cxSyncError || 'Unknown error';
         const userInField = newValue.cxSyncPending === 'issue' ? newValue.issuerSignature?.name : newValue.closureReceiverName;
 
+        // 🚀 MAGIA DE ADJUNTOS: Tomamos la URL del PDF guardado y lo descargamos al vuelo
+        const mailAttachments: any[] = [];
+        let attachmentNotice = `<p style="color: #dc2626; font-size: 14px;"><strong>Note:</strong> PDF Backup not available for attachment.</p>`;
+
+        if (newValue.pdfBackupUrl) {
+            mailAttachments.push({
+                filename: `EB_Permit_PF${permitNumber}_Backup.pdf`,
+                path: newValue.pdfBackupUrl // Nodemailer lo descarga directamente desde el enlace del Storage
+            });
+            attachmentNotice = `
+                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                    <p style="color: #16a34a; font-weight: bold; margin: 0; font-size: 15px;">✅ PDF Attached Successfully</p>
+                    <p style="color: #15803d; margin: 5px 0 0 0; font-size: 13px;">The completed permit has been attached to this email. You can directly upload it to iTwoCX.</p>
+                </div>
+            `;
+        }
+
         const mailOptions = {
             from: '"Can you dig it - System" <EBApermits@gmail.com>',
-            to: 'dietrich.truchsess@easternbusway.nz',
-            subject: `🚨 ALERT: CX Sync Failed on PF#${permitNumber}`,
+            to: ALERT_EMAILS,
+            subject: `🚨 ACTION REQUIRED: CX Sync Failed on PF#${permitNumber}`,
             html: `
-                <div style="font-family: sans-serif; color: #333;">
-                    <h2 style="color: #d97706;">iTwoCX Synchronization Failure</h2>
+                <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 8px;">
+                    <h2 style="color: #d97706; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-top: 0;">iTwoCX Synchronization Failure</h2>
                     <p><strong>Permit:</strong> PF#${permitNumber}</p>
                     <p><strong>Attempted Action:</strong> ${action}</p>
                     <p><strong>Field User:</strong> ${userInField || 'Unknown'}</p>
-                    <p><strong>Error reported by CX:</strong> <span style="color: #dc2626; font-weight: bold;">${errorMessage}</span></p>
-                    <hr style="border: 1px solid #eee;">
-                    <p style="font-size: 12px; color: #666;">
-                        <em>The permit was successfully saved locally in Firebase and site work continues. The user received a success screen. Manual synchronization in iTwoCX is required.</em>
+                    
+                    <div style="background-color: #fef2f2; padding: 15px; border-left: 4px solid #dc2626; margin: 15px 0;">
+                        <p style="margin: 0;"><strong>Error reported by CX Server:</strong></p>
+                        <p style="color: #dc2626; font-weight: bold; font-family: monospace; margin: 5px 0 0 0;">${errorMessage}</p>
+                    </div>
+
+                    ${attachmentNotice}
+
+                    <hr style="border: 1px solid #eee; margin-top: 20px;">
+                    <p style="font-size: 12px; color: #666; text-align: center;">
+                        <em>The permit data is fully preserved in the Firebase database. No data was lost.</em><br>
+                        <em>System Administration - EBA Digital Permits</em>
                     </p>
                 </div>
-            `
+            `,
+            attachments: mailAttachments
         };
 
         try {
             await transporter.sendMail(mailOptions);
-            console.log(`[ALERT] Email sent to easternbusway.nz for permit PF#${permitNumber}`);
+            console.log(`[ALERT] Email sent to ${ALERT_EMAILS} for permit PF#${permitNumber} with ${mailAttachments.length} attachments.`);
         } catch (error) {
             console.error('[ERROR] Failed to send alert email:', error);
         }

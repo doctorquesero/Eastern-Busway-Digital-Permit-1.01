@@ -287,7 +287,8 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 </table>
                 <div className="mt-auto space-y-2">
                     <EBASignature title="Permit Requester" sig={permit.siteEngineerSignature} />
-                    <EBASignature title="Permit Receiver" sig={currentReceiverSignature} />
+                    {/* 🚀 FIX: Usamos permit.receiverSignature (el receptor inicial/inducción) para congelar la Parte A */}
+                    <EBASignature title="Permit Receiver" sig={permit.receiverSignature} />
                 </div>
             </Page>
 
@@ -349,7 +350,8 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
 
                 <p className="text-red-600 text-[10px] font-bold mb-4">The original copy of this Permit must be retained at the work location while work is occurring.</p>
                 <p className="text-[10px] mb-4">I confirm that all the requirements of these checklists have been met and work may now proceed in accordance with the WMS, JSEA and SP27 Safe Work around Overhead and Underground Services.</p>
-                <EBASignature title="Permit Receiver" sig={currentReceiverSignature} />
+                {/* 🚀 FIX: Usamos permit.receiverSignature (el receptor inicial/inducción) para congelar la página 6 */}
+                <EBASignature title="Permit Receiver" sig={permit.receiverSignature} />
             </Page>
 
             {/* === PAGE 7 === */}
