@@ -3,6 +3,13 @@ import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 const corsHandler = require("cors")({ origin: true });
 const nodemailer = require('nodemailer');
 
+// 🚀 INICIALIZAR ADMIN PARA LEER LA BASE DE DATOS DE SETTINGS
+const admin = require('firebase-admin');
+if (!admin.apps.length) {
+    admin.initializeApp();
+}
+const db = admin.firestore();
+
 // 🚀 BASE URL CENTRALIZADA SEGÚN DOCUMENTACIÓN OFICIAL (VERSIÓN 25.12)
 const CX_API_BASE = "https://au.itwocx.com/api/25.12/Api";
 
@@ -23,7 +30,7 @@ const getBaseOptions = (sessionKey: string, method: string) => {
 // Limpieza de referencia y auto-relleno de ceros (ej. '18' -> 'PF#0018')
 const formatRef = (ref: string) => {
     const cleanRef = String(ref).replace(/\D/g, '');
-    const paddedRef = cleanRef.padStart(4, '0'); // 🚀 FIX: Auto-completa con ceros a 4 dígitos
+    const paddedRef = cleanRef.padStart(4, '0');
     return `PF%23${paddedRef}`;
 };
 
@@ -237,7 +244,7 @@ export const cxLogin = functions.https.onRequest((req, res) => {
 });
 
 // ============================================================================
-// 📧 MÓDULO DE ALERTAS Y VIGÍA DE FIREBASE (CON AUTO-ADJUNTO DE PDF)
+// 📧 MÓDULO DE ALERTAS Y VIGÍA DE FIREBASE
 // ============================================================================
 
 const transporter = nodemailer.createTransport({
@@ -248,7 +255,7 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// 🚀 LISTA DE DISTRIBUCIÓN (Fácil de cambiar para el próximo Document Controller)
+// 🚀 LISTA DE DISTRIBUCIÓN MAESTRA PARA ERRORES DE SISTEMA
 const ALERT_EMAILS = 'dietrich.truchsess@easternbusway.nz'; 
 
 export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}', async (event: any) => {
@@ -256,21 +263,24 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
 
     const newValue = event.data.after.data();
     const previousValue = event.data.before.data();
+    const permitId = event.params.permitId;
+    const permitNumber = newValue.itwocxNumber || newValue.permitNumber || permitId;
 
+    // ========================================================================
+    // 🚨 LÓGICA 1: FALLO DE SINCRONIZACIÓN CX (Se envía al Document Controller)
+    // ========================================================================
     if (newValue.cxSyncPending && previousValue.cxSyncPending !== newValue.cxSyncPending) {
-        const permitNumber = newValue.itwocxNumber || newValue.permitNumber || event.params.permitId;
         const action = newValue.cxSyncPending === 'issue' ? 'Issuance' : 'Closure';
         const errorMessage = newValue.cxSyncError || 'Unknown error';
         const userInField = newValue.cxSyncPending === 'issue' ? newValue.issuerSignature?.name : newValue.closureReceiverName;
 
-        // 🚀 MAGIA DE ADJUNTOS: Tomamos la URL del PDF guardado y lo descargamos al vuelo
         const mailAttachments: any[] = [];
         let attachmentNotice = `<p style="color: #dc2626; font-size: 14px;"><strong>Note:</strong> PDF Backup not available for attachment.</p>`;
 
         if (newValue.pdfBackupUrl) {
             mailAttachments.push({
                 filename: `EB_Permit_PF${permitNumber}_Backup.pdf`,
-                path: newValue.pdfBackupUrl // Nodemailer lo descarga directamente desde el enlace del Storage
+                path: newValue.pdfBackupUrl
             });
             attachmentNotice = `
                 <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 6px; margin: 20px 0;">
@@ -295,9 +305,7 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
                         <p style="margin: 0;"><strong>Error reported by CX Server:</strong></p>
                         <p style="color: #dc2626; font-weight: bold; font-family: monospace; margin: 5px 0 0 0;">${errorMessage}</p>
                     </div>
-
                     ${attachmentNotice}
-
                     <hr style="border: 1px solid #eee; margin-top: 20px;">
                     <p style="font-size: 12px; color: #666; text-align: center;">
                         <em>The permit data is fully preserved in the Firebase database. No data was lost.</em><br>
@@ -310,9 +318,85 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
 
         try {
             await transporter.sendMail(mailOptions);
-            console.log(`[ALERT] Email sent to ${ALERT_EMAILS} for permit PF#${permitNumber} with ${mailAttachments.length} attachments.`);
+            console.log(`[ALERT] Sync failure email sent for PF#${permitNumber}`);
         } catch (error) {
-            console.error('[ERROR] Failed to send alert email:', error);
+            console.error('[ERROR] Failed to send sync failure email:', error);
+        }
+    }
+
+    // ========================================================================
+    // 👷‍♂️ LÓGICA 2: AVISO AL APPROVER DE TRABAJO MECÁNICO (Part B Pending)
+    // ========================================================================
+    const isNowIssued = newValue.status === 'issued' && previousValue.status !== 'issued';
+    const isMechanical = newValue.excavationType === 'mechanical';
+    const needsApprover = !newValue.approverSignature?.data;
+
+    if (isNowIssued && isMechanical && needsApprover) {
+        console.log(`[NOTIFY] High Risk Work Detected: Generating Approver Alert for PF#${permitNumber}`);
+
+        // Extraer datos del Ingeniero (Si no hay email, avisamos)
+        const engineerName = newValue.siteEngineerSignature?.name || 'Not specified';
+        const engineerEmail = newValue.createdBy || 'Email not recorded';
+
+        // Buscar Approvers dinámicamente en Firestore
+        let approverEmailsList = 'tommy.temple@easternbusway.nz, krishna.nand@easternbusway.nz'; // Lista por defecto de seguridad
+        try {
+            const settingsDoc = await db.collection('appSettings').doc('global').get();
+            if (settingsDoc.exists) {
+                const roleAssignments = settingsDoc.data().roleAssignments || [];
+                const approvers = roleAssignments
+                    .filter((u: any) => u.role === 'Approver')
+                    .map((u: any) => u.email);
+                
+                if (approvers.length > 0) {
+                    approverEmailsList = approvers.join(', ');
+                }
+            }
+        } catch (err) {
+            console.error("⚠️ Error reading dynamic approvers from cloud, using fallback.", err);
+        }
+
+        const notifyOptions = {
+            from: '"Can you dig it - Safety Bot" <EBApermits@gmail.com>',
+            to: approverEmailsList,
+            cc: ALERT_EMAILS, // Dietrich queda en copia para auditoría
+            subject: `⚠️ ACTION REQUIRED: Part B Approval Pending - PF#${permitNumber}`,
+            html: `
+                <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                    <div style="background-color: #fef3c7; border-left: 6px solid #d97706; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
+                        <h2 style="color: #92400e; margin: 0; font-size: 18px; text-transform: uppercase; letter-spacing: 1px;">Mechanical Excavation Issued</h2>
+                        <p style="margin: 5px 0 0 0; font-size: 14px; font-weight: bold;">Site verification required before works commence.</p>
+                    </div>
+
+                    <div style="background-color: #f9fafb; padding: 15px; border-radius: 8px; margin-bottom: 25px;">
+                        <table style="width: 100%; font-size: 14px;">
+                            <tr><td style="padding: 4px 0; color: #6b7280; width: 120px;">Permit Number:</td><td style="font-weight: bold; color: #111827;">PF#${permitNumber}</td></tr>
+                            <tr><td style="padding: 4px 0; color: #6b7280;">Location:</td><td style="font-weight: bold; color: #111827;">${newValue.location || 'Not specified'}</td></tr>
+                            <tr><td style="padding: 4px 0; color: #6b7280;">Issued By:</td><td style="font-weight: bold; color: #111827;">${newValue.issuerSignature?.name || 'Authorized Issuer'}</td></tr>
+                            <tr><td style="padding: 4px 0; color: #6b7280;">Site Engineer:</td><td style="font-weight: bold; color: #2563eb;">${engineerName}</td></tr>
+                            <tr><td style="padding: 4px 0; color: #6b7280;">Engineer Email:</td><td style="color: #4b5563;">${engineerEmail}</td></tr>
+                        </table>
+                    </div>
+                    
+                    <div style="margin: 35px 0; text-align: center;">
+                        <a href="https://eba-digital-permits.web.app/#/permit/${permitId}" 
+                           style="background-color: #1d4ed8; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 900; font-size: 14px; display: inline-block; letter-spacing: 1px; text-transform: uppercase;">
+                           Review & Sign Part B
+                        </a>
+                    </div>
+
+                    <p style="font-size: 13px; color: #6b7280; line-height: 1.6; background-color: #f3f4f6; padding: 12px; border-radius: 6px;">
+                        <strong>Safety Standard Reminder:</strong> As per EBA policies, mechanical excavation cannot commence until the assigned Permit Approver has physically verified the site conditions and signed Part B.
+                    </p>
+                </div>
+            `
+        };
+
+        try {
+            await transporter.sendMail(notifyOptions);
+            console.log(`[NOTIFY] Approver alert sent successfully for PF#${permitNumber}`);
+        } catch (error) {
+            console.error('[ERROR] Failed to send approver notification:', error);
         }
     }
 });
