@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, doc, deleteDoc } from 'firebase/firestore'; 
 import { db } from '../firebase'; 
-import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, X, ChevronDown } from 'lucide-react'; 
+import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X } from 'lucide-react'; 
 import { getCurrentUserEmail } from '../services/cx';
 
 const permitCategories = [
@@ -20,6 +20,19 @@ const permitCategories = [
 
 const MASTER_SECURITY_PIN = "CX-Master-2026"; 
 
+// 🚀 DEFINICIÓN MAESTRA DE COLUMNAS (Estilo CX)
+const ALL_COLUMNS = [
+  { id: 'reference', label: 'Reference', alwaysVisible: true },
+  { id: 'type', label: 'Permit Type', alwaysVisible: false },
+  { id: 'location', label: 'Location', alwaysVisible: false },
+  { id: 'status', label: 'Status', alwaysVisible: false },
+  { id: 'engineer', label: 'Site Engineer', alwaysVisible: false },
+  { id: 'receiver', label: 'Receiver', alwaysVisible: false },
+  { id: 'issuer', label: 'Issuer', alwaysVisible: false },
+  { id: 'approver', label: 'Approver', alwaysVisible: false },
+  { id: 'action', label: 'Action', alwaysVisible: true }
+];
+
 export const Dashboard = () => {
   const navigate = useNavigate();
   const [savedPermits, setSavedPermits] = useState<any[]>([]);
@@ -29,33 +42,27 @@ export const Dashboard = () => {
   const [securityPin, setSecurityPin] = useState('');
   const [pinError, setPinError] = useState('');
 
-  // 🚀 ESTADOS DEL FILTRO AVANZADO
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [filters, setFilters] = useState({
-    status: 'all',
-    engineer: 'all',
-    receiver: 'all',
-    issuer: 'all',
-    approver: 'all'
-  });
-
   const currentUser = getCurrentUserEmail().toLowerCase();
   const isSuperAdmin = currentUser.includes('dietrich') || currentUser.includes('eba-dt');
+
+  // 🚀 ESTADOS DE LA TABLA DINÁMICA (CX Style)
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(['reference', 'type', 'location', 'status', 'action']);
+  const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
+  const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>({
+      status: [], engineer: [], receiver: [], issuer: [], approver: []
+  });
 
   const loadPermits = async () => {
     setIsSyncing(true);
     try {
       const querySnapshot = await getDocs(collection(db, 'permits'));
       const permitsFromCloud: any[] = [];
-      
-      querySnapshot.forEach((doc) => {
-        permitsFromCloud.push(doc.data());
-      });
+      querySnapshot.forEach((doc) => permitsFromCloud.push(doc.data()));
 
       if (permitsFromCloud.length > 0) {
         localStorage.setItem('eba_permits_db_v3', JSON.stringify(permitsFromCloud));
       }
-
       permitsFromCloud.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       setSavedPermits(permitsFromCloud);
     } catch (error) {
@@ -72,9 +79,7 @@ export const Dashboard = () => {
     }
   };
 
-  useEffect(() => {
-    loadPermits();
-  }, []);
+  useEffect(() => { loadPermits(); }, []);
 
   const handleCategoryClick = (code: string) => {
     if (code === 'EX') navigate('/new');
@@ -88,12 +93,8 @@ export const Dashboard = () => {
   };
 
   const executeSecureDeletion = async () => {
-    if (securityPin !== MASTER_SECURITY_PIN) {
-      setPinError('Invalid Security PIN. Access Denied.');
-      return;
-    }
+    if (securityPin !== MASTER_SECURITY_PIN) return setPinError('Invalid Security PIN. Access Denied.');
     if (!deleteTarget) return;
-
     try {
       await deleteDoc(doc(db, 'permits', deleteTarget.id)); 
       setSavedPermits(prev => prev.filter(p => p.id !== deleteTarget.id)); 
@@ -104,37 +105,53 @@ export const Dashboard = () => {
     }
   };
 
-  // 🚀 EXTRACCIÓN DINÁMICA DE NOMBRES PARA LOS FILTROS
-  const uniqueEngineers = useMemo(() => Array.from(new Set(savedPermits.map(p => p.siteEngineerSignature?.name).filter(Boolean))), [savedPermits]);
-  const uniqueReceivers = useMemo(() => Array.from(new Set(savedPermits.map(p => p.receiverSignature?.name).filter(Boolean))), [savedPermits]);
-  const uniqueIssuers = useMemo(() => Array.from(new Set(savedPermits.map(p => p.issuerSignature?.name).filter(Boolean))), [savedPermits]);
-  const uniqueApprovers = useMemo(() => Array.from(new Set(savedPermits.map(p => p.approverSignature?.name).filter(Boolean))), [savedPermits]);
+  // 🚀 EXTRACCIÓN DINÁMICA DE OPCIONES PARA LOS FILTROS
+  const filterOptions = useMemo(() => {
+    return {
+      status: ['DRAFT', 'ACTIVE', 'CLOSED'],
+      engineer: Array.from(new Set(savedPermits.map(p => p.siteEngineerSignature?.name).filter(Boolean))),
+      receiver: Array.from(new Set(savedPermits.map(p => p.receiverSignature?.name).filter(Boolean))),
+      issuer: Array.from(new Set(savedPermits.map(p => p.issuerSignature?.name).filter(Boolean))),
+      approver: Array.from(new Set(savedPermits.map(p => p.approverSignature?.name).filter(Boolean)))
+    };
+  }, [savedPermits]);
 
-  // 🚀 LÓGICA DE FILTRADO MULTICRITERIO
+  // 🚀 LÓGICA DE FILTRADO MULTICRITERIO CX
   const filteredPermits = savedPermits.filter(p => {
-    // 1. Filtro de Estado
-    if (filters.status === 'draft' && !p.isDraft) return false;
-    if (filters.status === 'active' && (p.isDraft || p.status === 'closed')) return false;
-    if (filters.status === 'closed' && p.status !== 'closed') return false;
-
-    // 2. Filtros de Roles
-    if (filters.engineer !== 'all' && p.siteEngineerSignature?.name !== filters.engineer) return false;
-    if (filters.receiver !== 'all' && p.receiverSignature?.name !== filters.receiver) return false;
-    if (filters.issuer !== 'all' && p.issuerSignature?.name !== filters.issuer) return false;
-    if (filters.approver !== 'all' && p.approverSignature?.name !== filters.approver) return false;
-
+    const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
+    
+    if (columnFilters.status.length > 0 && !columnFilters.status.includes(pStatus)) return false;
+    if (columnFilters.engineer.length > 0 && !columnFilters.engineer.includes(p.siteEngineerSignature?.name)) return false;
+    if (columnFilters.receiver.length > 0 && !columnFilters.receiver.includes(p.receiverSignature?.name)) return false;
+    if (columnFilters.issuer.length > 0 && !columnFilters.issuer.includes(p.issuerSignature?.name)) return false;
+    if (columnFilters.approver.length > 0 && !columnFilters.approver.includes(p.approverSignature?.name)) return false;
+    
     return true; 
   });
 
-  const resetFilters = () => {
-    setFilters({ status: 'all', engineer: 'all', receiver: 'all', issuer: 'all', approver: 'all' });
+  const toggleColumn = (colId: string) => {
+    if (ALL_COLUMNS.find(c => c.id === colId)?.alwaysVisible) return;
+    setSelectedColumns(prev => prev.includes(colId) ? prev.filter(id => id !== colId) : [...prev, colId]);
+  };
+
+  const toggleFilterOption = (colId: string, value: string) => {
+    setColumnFilters(prev => {
+      const current = prev[colId] || [];
+      return {
+        ...prev,
+        [colId]: current.includes(value) ? current.filter(v => v !== value) : [...current, value]
+      };
+    });
+  };
+
+  const clearFilter = (colId: string) => {
+    setColumnFilters(prev => ({ ...prev, [colId]: [] }));
+    setActiveFilterMenu(null);
   };
 
   const totalClosed = savedPermits.filter(p => p.status === 'closed').length;
   const totalDrafts = savedPermits.filter(p => p.isDraft).length;
   const totalActive = savedPermits.filter(p => !p.isDraft && p.status !== 'closed').length;
-  
-  const activeFilterCount = Object.values(filters).filter(val => val !== 'all').length;
 
   return (
     <div className="min-h-screen bg-gray-50 p-6 relative">
@@ -146,46 +163,25 @@ export const Dashboard = () => {
             <h3 className="text-xl font-black text-red-700 mb-2 flex items-center gap-2 uppercase tracking-tighter">
               <ShieldAlert size={24} /> Master Override
             </h3>
-            <p className="text-sm text-gray-600 mb-6 font-medium">
-              You are about to permanently delete <strong>PF#{deleteTarget.num}</strong> from the cloud database. Enter the Master PIN to verify your identity.
-            </p>
-            
-            <input
-              type="password"
-              value={securityPin}
-              onChange={e => { setSecurityPin(e.target.value); setPinError(''); }}
-              placeholder="Enter PIN / Password..."
-              className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 mb-2 focus:border-red-500 focus:ring-2 focus:ring-red-200 outline-none transition-all text-center tracking-[0.5em] font-black"
-            />
-            
-            <div className="h-6 mb-4">
-              {pinError && <p className="text-red-600 text-xs font-bold text-center">{pinError}</p>}
-            </div>
-
+            <p className="text-sm text-gray-600 mb-6 font-medium">You are about to permanently delete <strong>PF#{deleteTarget.num}</strong>. Enter PIN to verify.</p>
+            <input type="password" value={securityPin} onChange={e => { setSecurityPin(e.target.value); setPinError(''); }} placeholder="Enter PIN..." className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 mb-2 focus:border-red-500 text-center tracking-[0.5em] font-black outline-none" />
+            <div className="h-6 mb-4">{pinError && <p className="text-red-600 text-xs font-bold text-center">{pinError}</p>}</div>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setDeleteTarget(null)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-black uppercase text-xs rounded-xl hover:bg-gray-200 transition-colors">
-                Cancel
-              </button>
-              <button onClick={executeSecureDeletion} className="flex-1 py-3 bg-red-600 text-white font-black uppercase text-xs rounded-xl hover:bg-red-700 transition-colors shadow-lg shadow-red-600/30 flex items-center justify-center gap-2">
-                <Trash2 size={16}/> Delete
-              </button>
+              <button onClick={() => setDeleteTarget(null)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-black uppercase text-xs rounded-xl hover:bg-gray-200">Cancel</button>
+              <button onClick={executeSecureDeletion} className="flex-1 py-3 bg-red-600 text-white font-black uppercase text-xs rounded-xl hover:bg-red-700 flex items-center justify-center gap-2"><Trash2 size={16}/> Delete</button>
             </div>
           </div>
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto space-y-8">
+      <div className="max-w-[1400px] mx-auto space-y-8">
         
         <div className="flex justify-between items-end">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Work Permits Dashboard</h1>
             <p className="text-gray-500 mt-1">Safety Intelligence & Permit Overview</p>
           </div>
-          <button 
-            onClick={loadPermits} 
-            disabled={isSyncing}
-            className="flex items-center gap-2 bg-white border border-gray-300 shadow-sm px-4 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all"
-          >
+          <button onClick={loadPermits} disabled={isSyncing} className="flex items-center gap-2 bg-white border border-gray-300 shadow-sm px-4 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all">
             {isSyncing ? <Loader2 size={16} className="animate-spin"/> : <RefreshCw size={16} />}
             <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Refresh Cloud'}</span>
           </button>
@@ -206,136 +202,157 @@ export const Dashboard = () => {
           </div>
         </div>
 
+        {/* 🚀 ZONA DE LA TABLA DINÁMICA ESTILO CX */}
         <div>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b pb-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b pb-2 relative">
               <h2 className="text-2xl font-bold text-gray-900">Cloud Synced Permits</h2>
               
-              {/* BOTÓN TOGGLE FILTROS */}
-              <button 
-                onClick={() => setIsFilterOpen(!isFilterOpen)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-colors border ${activeFilterCount > 0 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'}`}
-              >
-                  <Filter size={16} />
-                  Advanced Filters {activeFilterCount > 0 && <span className="bg-blue-600 text-white rounded-full px-2 py-0.5 text-xs">{activeFilterCount}</span>}
-                  <ChevronDown size={16} className={`transition-transform ${isFilterOpen ? 'rotate-180' : ''}`} />
-              </button>
+              {/* BOTÓN COLUMNAS (CX Style) */}
+              <div className="relative">
+                <button 
+                  onClick={() => setShowColumnSelector(!showColumnSelector)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 shadow-sm transition-colors"
+                >
+                    <Columns size={16} /> COLUMNS
+                </button>
+
+                {showColumnSelector && (
+                  <div className="absolute right-0 top-12 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                    <div className="bg-gray-50 p-3 border-b border-gray-200 font-bold text-xs uppercase tracking-wider text-gray-700">Select Columns</div>
+                    <div className="max-h-64 overflow-y-auto p-2">
+                      {ALL_COLUMNS.map(col => (
+                        <label key={col.id} className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors ${col.alwaysVisible ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                          {selectedColumns.includes(col.id) ? <CheckSquare size={18} className="text-blue-600"/> : <Square size={18} className="text-gray-400"/>}
+                          <span className="text-sm font-semibold text-gray-800">{col.label}</span>
+                          <input type="checkbox" className="hidden" disabled={col.alwaysVisible} checked={selectedColumns.includes(col.id)} onChange={() => toggleColumn(col.id)} />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="p-2 border-t border-gray-200"><button onClick={() => setShowColumnSelector(false)} className="w-full py-2 bg-blue-600 text-white font-bold text-sm rounded-lg hover:bg-blue-700">Done</button></div>
+                  </div>
+                )}
+              </div>
           </div>
 
-          {/* 🚀 PANEL DE FILTROS AVANZADOS (Desplegable) */}
-          {isFilterOpen && (
-              <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200 mb-6 animate-in slide-in-from-top-4 fade-in duration-200">
-                  <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-black text-gray-800 uppercase tracking-wider text-sm flex items-center gap-2"><Filter size={16}/> Filter Criteria</h3>
-                      {activeFilterCount > 0 && (
-                          <button onClick={resetFilters} className="text-xs font-bold text-red-600 hover:text-red-800 flex items-center gap-1">
-                              <X size={14}/> Clear All
-                          </button>
-                      )}
-                  </div>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                      {/* Filter: Status */}
-                      <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5">Project Status</label>
-                          <select value={filters.status} onChange={e => setFilters({...filters, status: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none">
-                              <option value="all">All Statuses</option>
-                              <option value="active">Active (Issued)</option>
-                              <option value="draft">Drafts</option>
-                              <option value="closed">Closed</option>
-                          </select>
-                      </div>
-                      
-                      {/* Filter: Engineer */}
-                      <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5">Site Engineer</label>
-                          <select value={filters.engineer} onChange={e => setFilters({...filters, engineer: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none">
-                              <option value="all">All Engineers</option>
-                              {uniqueEngineers.map((name, i) => <option key={i} value={name as string}>{name as string}</option>)}
-                          </select>
-                      </div>
-
-                      {/* Filter: Receiver */}
-                      <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5">Permit Receiver</label>
-                          <select value={filters.receiver} onChange={e => setFilters({...filters, receiver: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none">
-                              <option value="all">All Receivers</option>
-                              {uniqueReceivers.map((name, i) => <option key={i} value={name as string}>{name as string}</option>)}
-                          </select>
-                      </div>
-
-                      {/* Filter: Issuer */}
-                      <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5">Permit Issuer</label>
-                          <select value={filters.issuer} onChange={e => setFilters({...filters, issuer: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none">
-                              <option value="all">All Issuers</option>
-                              {uniqueIssuers.map((name, i) => <option key={i} value={name as string}>{name as string}</option>)}
-                          </select>
-                      </div>
-
-                      {/* Filter: Approver */}
-                      <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5">Permit Approver</label>
-                          <select value={filters.approver} onChange={e => setFilters({...filters, approver: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none">
-                              <option value="all">All Approvers</option>
-                              {uniqueApprovers.map((name, i) => <option key={i} value={name as string}>{name as string}</option>)}
-                          </select>
-                      </div>
-                  </div>
-              </div>
-          )}
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 min-h-[400px]">
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm text-left">
                 <thead className="bg-gray-100 text-gray-700 uppercase font-black text-[10px] tracking-widest border-b-2 border-gray-200">
                   <tr>
-                    <th className="p-4">Reference</th>
-                    <th className="p-4">Type</th>
-                    <th className="p-4">Location</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4 text-center">Action</th>
+                    {ALL_COLUMNS.filter(c => selectedColumns.includes(c.id)).map(col => {
+                      const hasFilter = filterOptions[col.id as keyof typeof filterOptions] !== undefined;
+                      const isFilterActive = hasFilter && columnFilters[col.id].length > 0;
+                      
+                      return (
+                        <th key={col.id} className="p-4 relative group">
+                          <div className="flex items-center gap-2">
+                            {col.label}
+                            {/* ICONO DE EMBUDO CX STYLE */}
+                            {hasFilter && (
+                              <button 
+                                onClick={() => setActiveFilterMenu(activeFilterMenu === col.id ? null : col.id)}
+                                className={`p-1 rounded transition-colors ${isFilterActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-800 hover:bg-gray-200'}`}
+                              >
+                                <Filter size={14} className={isFilterActive ? 'fill-current' : ''} />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* DROPDOWN DEL FILTRO (Aparece bajo la columna) */}
+                          {activeFilterMenu === col.id && (
+                             <div className="absolute left-4 top-12 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden font-normal normal-case tracking-normal text-gray-900 animate-in fade-in slide-in-from-top-1">
+                                <div className="p-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                                   <div className="flex items-center gap-2 text-xs font-bold text-gray-500"><Search size={14}/> Filter {col.label}</div>
+                                   <button onClick={() => setActiveFilterMenu(null)} className="text-gray-400 hover:text-red-500"><X size={14}/></button>
+                                </div>
+                                <div className="max-h-48 overflow-y-auto p-1">
+                                    {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
+                                      <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
+                                        {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600"/> : <Square size={16} className="text-gray-300"/>}
+                                        {opt}
+                                        <input type="checkbox" className="hidden" checked={columnFilters[col.id].includes(opt)} onChange={() => toggleFilterOption(col.id, opt)} />
+                                      </label>
+                                    ))}
+                                </div>
+                                <div className="p-2 border-t border-gray-100 flex gap-2">
+                                    <button onClick={() => clearFilter(col.id)} className="flex-1 py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200">Clear</button>
+                                    <button onClick={() => setActiveFilterMenu(null)} className="flex-1 py-1.5 text-xs font-bold text-white bg-blue-600 rounded hover:bg-blue-700">Apply</button>
+                                </div>
+                             </div>
+                          )}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredPermits.length === 0 ? (
                     <tr>
-                        <td colSpan={5} className="p-12 text-center text-gray-400">
-                            <Filter size={48} className='mx-auto mb-4 opacity-30 text-gray-300'/>
-                            <p className='font-bold uppercase tracking-wider text-gray-500'>No permits match your filters</p>
-                            <p className='text-xs mt-1'>Try clearing some filters to see more results.</p>
-                            {activeFilterCount > 0 && (
-                                <button onClick={resetFilters} className="mt-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-bold text-xs uppercase transition-colors">
-                                    Clear Filters
-                                </button>
-                            )}
+                        <td colSpan={selectedColumns.length} className="p-12 text-center text-gray-400">
+                            <Search size={48} className='mx-auto mb-4 opacity-30 text-gray-300'/>
+                            <p className='font-bold uppercase tracking-wider text-gray-500'>No results found</p>
+                            <p className='text-xs mt-1'>Check your column filters.</p>
                         </td>
                     </tr>
                   ) : (
-                    filteredPermits.map((p) => (
-                      <tr key={p.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="p-4 font-black text-blue-700">{p.itwocxNumber ? `PF#${p.itwocxNumber.replace(/\D/g, "")}` : 'DRAFT'}</td>
-                        <td className="p-4 font-bold text-gray-700">{p.excavationType ? String(p.excavationType).toUpperCase() : 'UNKNOWN'}</td>
-                        <td className="p-4 text-gray-600 font-medium">{p.location || 'No location'}</td>
-                        <td className="p-4">
-                          <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${p.status === 'closed' ? 'bg-red-100 text-red-800' : (p.isDraft ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>
-                            {p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT (Building)' : 'ACTIVE')}
-                          </span>
-                        </td>
-                        <td className="p-4 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            <button onClick={() => navigate(`/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">
-                              Open
-                            </button>
-                            
-                            {isSuperAdmin && (
-                              <button onClick={() => requestDeletion(p.id, p.itwocxNumber || 'DRAFT')} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-colors" title="Secure Delete">
-                                <Trash2 size={16} />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                    filteredPermits.map((p) => {
+                      const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
+                      return (
+                        <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                          
+                          {selectedColumns.includes('reference') && (
+                            <td className="p-4 font-black text-blue-700">{p.itwocxNumber ? `PF#${p.itwocxNumber.replace(/\D/g, "")}` : 'DRAFT'}</td>
+                          )}
+                          
+                          {selectedColumns.includes('type') && (
+                            <td className="p-4 font-bold text-gray-700">{p.excavationType ? String(p.excavationType).toUpperCase() : 'UNKNOWN'}</td>
+                          )}
+                          
+                          {selectedColumns.includes('location') && (
+                            <td className="p-4 text-gray-600 font-medium">{p.location || '-'}</td>
+                          )}
+                          
+                          {selectedColumns.includes('status') && (
+                            <td className="p-4">
+                              <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${pStatus === 'CLOSED' ? 'bg-red-100 text-red-800' : (pStatus === 'DRAFT' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>
+                                {pStatus}
+                              </span>
+                            </td>
+                          )}
+
+                          {selectedColumns.includes('engineer') && (
+                            <td className="p-4 text-xs font-bold text-gray-600">{p.siteEngineerSignature?.name || '-'}</td>
+                          )}
+
+                          {selectedColumns.includes('receiver') && (
+                            <td className="p-4 text-xs font-bold text-gray-600">{p.receiverSignature?.name || '-'}</td>
+                          )}
+
+                          {selectedColumns.includes('issuer') && (
+                            <td className="p-4 text-xs font-bold text-gray-600">{p.issuerSignature?.name || '-'}</td>
+                          )}
+
+                          {selectedColumns.includes('approver') && (
+                            <td className="p-4 text-xs font-bold text-gray-600">{p.approverSignature?.name || '-'}</td>
+                          )}
+
+                          {selectedColumns.includes('action') && (
+                            <td className="p-4 text-center">
+                              <div className="flex items-center justify-center gap-2">
+                                <button onClick={() => navigate(`/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">
+                                  Open
+                                </button>
+                                {isSuperAdmin && (
+                                  <button onClick={() => requestDeletion(p.id, p.itwocxNumber || 'DRAFT')} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-colors" title="Secure Delete">
+                                    <Trash2 size={16} />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
