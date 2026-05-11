@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, Trash2, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff } from 'lucide-react';
+import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, Trash2, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff, Wifi } from 'lucide-react';
 import { Permit, Signature, HandoverLog, DailySignOff, PermitPhoto, CeaseWorksRecord, CrewMember, INITIAL_PART_A, INITIAL_PART_B, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST } from '../types';
 import { getPermitById, savePermit } from '../services/storage';
 import { submitPermitToCX, issuePermitToCX, getUserRole } from '../services/cx'; 
@@ -45,6 +45,20 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+    const [isUploadingApproverPhoto, setIsUploadingApproverPhoto] = useState(false); 
+    
+    // 🚀 DETECTOR DE SEÑAL EN VIVO
+    const [isOnline, setIsOnline] = useState(navigator.onLine);
+    useEffect(() => {
+        const handleOnline = () => setIsOnline(true);
+        const handleOffline = () => setIsOnline(false);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
     
     const sessionRole = getUserRole().toLowerCase();
     const isMaster = sessionRole.includes('master');
@@ -75,6 +89,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const cameraInputRef = useRef<HTMLInputElement>(null);
     const galleryInputRef = useRef<HTMLInputElement>(null);
+    const approverCameraRef = useRef<HTMLInputElement>(null);
     const pdfExportRef = useRef<HTMLDivElement>(null);
 
     if (!permit) return <div className="p-12 text-center text-red-600 font-black">Permit Not Found.</div>;
@@ -104,9 +119,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const allHandoverChecksPassed = handoverItems.every(item => handoverChecks[item.id]);
     const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100 disabled:text-gray-500 shadow-sm";
 
+    // 🚀 SYNC DE TEXTO EN EL FONDO (Seguro y ligero)
     const syncToFirebase = async (updatedPermit: Permit) => {
-        savePermit(updatedPermit); setPermit(updatedPermit);
-        try { await setDoc(doc(db, 'permits', updatedPermit.id), updatedPermit, { merge: true }); } catch (e) { console.error(e); }
+        savePermit(updatedPermit); 
+        setPermit(updatedPermit);
+        setDoc(doc(db, 'permits', updatedPermit.id), updatedPermit, { merge: true }).catch(e => console.error("Firebase background sync:", e));
     };
 
     const updateField = (field: keyof Permit, value: any) => {
@@ -123,6 +140,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         syncToFirebase({ ...permit, [listName]: updatedList } as Permit);
     };
 
+    // 🚀 EMISIÓN: PERMITIDA OFFLINE
     const handleIssuePermit = async () => {
         if (!permit.siteEngineerSignature || !permit.receiverSignature || !permit.issuerSignature) {
             alert("🛑 CANNOT ISSUE:\n\nEngineer, Receiver, and Issuer signatures are required before issuing to the field."); return;
@@ -137,25 +155,50 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             const updated = { ...permit, isDraft: false, status: 'issued' } as Permit;
             await syncToFirebase(updated);
             
+            if (!isOnline) throw new Error("NETWORK_OFFLINE");
+            
             try {
                 await issuePermitToCX(updated);
-                await syncToFirebase({ ...updated, cxSyncPending: null, cxSyncError: null } as any);
+                await syncToFirebase({ ...updated, syncStatus: 'synced', cxSyncPending: null, cxSyncError: null } as any);
+                alert("✅ PERMIT ISSUED TO SITE!\n\nThe status is now 'ISSUED'. Tabs 1, 2, and 3 are locked.");
             } catch (cxError: any) {
-                console.error("CX Sync Error (Silent):", cxError);
-                await syncToFirebase({ ...updated, cxSyncPending: 'issue', cxSyncError: cxError.message } as any);
+                throw cxError; 
             }
             
-            alert("✅ PERMIT ISSUED TO SITE!\n\nThe status is now 'ISSUED'. Tabs 1, 2, and 3 are locked.");
-            
         } catch (error: any) {
-            alert(`🛑 CRITICAL ERROR: Could not save to Firebase. Please check your connection.`);
+            // 🐛 SOLUCIÓN: Agregada la etiqueta syncStatus: 'pending'
+            const updatedPending = { ...permit, isDraft: false, status: 'issued', syncStatus: 'pending', cxSyncPending: 'issue', cxSyncError: error.message } as any;
+            await syncToFirebase(updatedPending);
+            
+            if (error.message === "NETWORK_OFFLINE") {
+                alert("⚠️ OFFLINE MODE: Permit Issued to Site!\n\nThe permit is now active for the crew. It has been placed in the Sync Queue and will upload to iTwoCX automatically when internet returns.");
+            } else {
+                alert(`⚠️ SYNC ALERT: Permit Issued to Site!\n\nPermit is active, but CX rejected the sync. Added to Queue.\nError: ${error.message}`);
+            }
         } finally {
-            setIsSubmitting(false);
+            setIsSubmitting(false); 
         }
+    };
+
+    // 🚀 FOTOS: REQUIEREN INTERNET 
+    const handleApproverPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (isClosed || !e.target.files || e.target.files.length === 0 || !permit) return;
+        if (!isOnline) { alert("🛑 NO INTERNET\n\nYou must be connected to the internet to upload photos securely to the vault."); e.target.value = ''; return; }
+
+        setIsUploadingApproverPhoto(true);
+        try {
+            const file = e.target.files[0];
+            const compressedDataUrl = await compressImage(file);
+            const cloudUrl = await uploadImageToStorage(compressedDataUrl, `approver_${permit.itwocxNumber}_${Date.now()}.jpg`);
+            await syncToFirebase({ ...permit, approverPhoto: cloudUrl } as any);
+        } catch (err) {
+            alert("Error uploading approver photo to cloud. Check internet connection.");
+        } finally { setIsUploadingApproverPhoto(false); e.target.value = ''; }
     };
 
     const handleApproverSign = async (sig: Signature) => {
         if (!isApprover) { alert(`🛑 ACTION DENIED:\n\nOnly an official Permit Approver can sign this section.`); return; }
+        if (!(permit as any).approverPhoto) { alert("🛑 MANDATORY PHOTO REQUIRED:\n\nYou must upload a photo of your physical site inspection before signing."); return; }
         syncToFirebase({ ...permit, approverSignature: sig } as Permit);
     };
 
@@ -182,8 +225,14 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setHandoverReceiver(''); setHandoverSignature(null); setHandoverChecks({});
     };
 
+    // 🚀 CIERRE: REQUIERE INTERNET ESTRICTO 
     const handleAutomatedCloseAndLodge = async () => {
+        if (!isOnline) {
+            alert("🛑 INTERNET CONNECTION REQUIRED\n\nClosing a permit generates a heavy 12-page PDF file with all signatures and photos. You must have an active internet connection to secure this document in the cloud. Please find a 4G/WiFi signal before closing."); 
+            return; 
+        }
         if (isExecutionBlocked) { alert("🛑 ERROR: The permit cannot be closed because Part B has not been approved by the Permit Approver."); return; }
+        
         let errors = [];
         if (!preClosureCheck1 && !preClosureCheck3) errors.push("Closure: Select 'Safe' or 'Outstanding'");
         if (preClosureCheck3 && !outstandingWorks.trim()) errors.push("Closure: Detail outstanding works");
@@ -225,27 +274,26 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     const downloadUrl = await getDownloadURL(pdfRef);
                     updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl } as any;
                     await syncToFirebase(updatedPermit);
-                } catch (storageError) {
-                    console.error("Backup PDF Error (Silent):", storageError);
-                }
+                } catch (storageError) { console.error("Backup PDF Error:", storageError); }
                 
                 try {
                     await submitPermitToCX({ ...updatedPermit, itwocxNumber: rawNumber, issuerSignature: { data: `data:application/pdf;base64,${pdfBase64}` } }, `EB_Permit_PF${rawNumber}_${new Date().getTime()}.pdf`);
-                    await syncToFirebase({ ...updatedPermit, cxSyncPending: null, cxSyncError: null } as any);
-                } catch (cxError: any) {
-                    console.error("CX Lodge Error (Silent):", cxError);
-                    await syncToFirebase({ ...updatedPermit, cxSyncPending: 'closure', cxSyncError: cxError.message } as any);
-                }
-                
-                alert(`🎉 SUCCESS!\nPermit successfully closed and saved.`);
+                    await syncToFirebase({ ...updatedPermit, syncStatus: 'synced', cxSyncPending: null, cxSyncError: null } as any);
+                    alert(`🎉 SUCCESS!\nPermit successfully closed and saved in iTwoCX.`);
+                } catch (cxError: any) { throw cxError; }
             }
         } catch (error: any) { 
-            alert(`⚠️ PDF GENERATION FAILED:\n${error.message}\n\nThe permit is saved locally and closed.`); 
+            // 🐛 SOLUCIÓN: Agregada la etiqueta syncStatus: 'pending'
+            const updatedPending = { ...updatedPermit, syncStatus: 'pending', cxSyncPending: 'closure', cxSyncError: error.message } as any;
+            await syncToFirebase(updatedPending);
+            alert(`⚠️ SYNC ALERT: Permit Closed locally, but CX Sync Failed.\nAdded to Queue.\nError: ${error.message}`);
         } finally { setIsSubmitting(false); }
     };
 
     const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (isClosed || !e.target.files || e.target.files.length === 0 || !permit) return;
+        if (!isOnline) { alert("🛑 NO INTERNET\n\nYou must be connected to the internet to upload photos."); e.target.value = ''; return; }
+
         setIsUploadingPhoto(true); 
         try {
             const file = e.target.files[0];
@@ -257,44 +305,45 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         } catch (err) { alert("Error uploading photo to cloud."); } finally { setIsUploadingPhoto(false); e.target.value = ''; }
     };
 
-    // 🚀 FIXED: CEASE WORKS EMERGENCY CLOSURE - USANDO TÉRMINOS SEGUROS
+    // 🚀 EMERGENCIA: REQUIERE INTERNET ESTRICTO
     const handleCeaseWorksSave = async (sig: Signature) => {
         if (isClosed || !permit || !ceaseItem || !ceaseAction || !ceaseIssuerName) { alert("Fill all fields."); return; }
+        if (ceaseAction === 'cancelled' && !isOnline) {
+            alert("🛑 INTERNET CONNECTION REQUIRED\n\nExecuting this protocol generates a heavy PDF report. You must be connected to the internet to secure this document in the cloud. Please find signal."); return;
+        }
 
         const isConfirmed = confirm("🚨 EXECUTING CEASE WORKS PROTOCOL\n\nIf you proceed, this permit will be permanently locked and synchronized with iTwoCX as CLOSED. The reasons for the stoppage will be permanently attached. Do you wish to proceed?");
         if (!isConfirmed) return;
 
         setIsSubmitting(true);
-        try {
-            const newRecord: CeaseWorksRecord = { id: crypto.randomUUID(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
-            let updatedPermit = { ...permit, ceaseWorksRecord: newRecord };
+        
+        const newRecord: CeaseWorksRecord = { id: crypto.randomUUID(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
+        let updatedPermit = { ...permit, ceaseWorksRecord: newRecord };
 
-            if (ceaseAction === 'cancelled') { 
-                // 🧠 Diccionario de razones
-                const ceaseReasons: Record<string, string> = {
-                    '1': "Unidentified service or archaeological items encountered (Strike).",
-                    '2': "Methodology or site conditions changed.",
-                    '3': "Change in foreman, excavator operator or spotter.",
-                    '4': "Asbestos or other contaminates encountered."
-                };
-                const reasonText = ceaseReasons[ceaseItem] || "Emergency Protocol Triggered";
+        if (ceaseAction === 'cancelled') { 
+            const ceaseReasons: Record<string, string> = {
+                '1': "Unidentified service or archaeological items encountered (Strike).",
+                '2': "Methodology or site conditions changed.",
+                '3': "Change in foreman, excavator operator or spotter.",
+                '4': "Asbestos or other contaminates encountered."
+            };
+            const reasonText = ceaseReasons[ceaseItem] || "Emergency Protocol Triggered";
 
-                // 🚨 Términos seguros ("CLOSED", "EMERGENCY CLOSED") que no alteran el WAF
-                updatedPermit.status = 'closed'; 
-                updatedPermit.closureDate = new Date().toISOString(); 
-                updatedPermit.closureReceiverName = `EMERGENCY CLOSED (${ceaseIssuerName})`;
-                updatedPermit.closureSignature = sig; 
-                
-                updatedPermit.closureChecklistExcavationSafe = false;
-                updatedPermit.closureChecklistOutstandingWorks = true;
-                updatedPermit.closureOutstandingWorksDetails = `🚨 PERMIT CLOSED DUE TO CEASE WORKS PROTOCOL.\nReason: ${reasonText}`;
-                
-                updatedPermit.otherNotes = (updatedPermit.otherNotes || '') + `\n\n🚨 EMERGENCY CLOSED VIA CEASE WORKS PROTOCOL by ${ceaseIssuerName}. Reason: ${reasonText}`;
-            }
+            updatedPermit.status = 'closed'; 
+            updatedPermit.closureDate = new Date().toISOString(); 
+            updatedPermit.closureReceiverName = `EMERGENCY CLOSED (${ceaseIssuerName})`;
+            updatedPermit.closureSignature = sig; 
             
+            updatedPermit.closureChecklistExcavationSafe = false;
+            updatedPermit.closureChecklistOutstandingWorks = true;
+            updatedPermit.closureOutstandingWorksDetails = `🚨 PERMIT CLOSED DUE TO CEASE WORKS PROTOCOL.\nReason: ${reasonText}`;
+            
+            updatedPermit.otherNotes = (updatedPermit.otherNotes || '') + `\n\n🚨 EMERGENCY CLOSED VIA CEASE WORKS PROTOCOL by ${ceaseIssuerName}. Reason: ${reasonText}`;
+        }
+        
+        try {
             await syncToFirebase(updatedPermit as Permit);
 
-            // 🚀 SINCRONIZACIÓN AUTOMÁTICA CON CX (Con alertas correctas)
             if (ceaseAction === 'cancelled') {
                 if (pdfExportRef.current) {
                     await new Promise(resolve => setTimeout(resolve, 800)); 
@@ -308,7 +357,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     const rawNumber = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || "").replace(/\D/g, "");
                     const pdfBase64 = pdf.output('datauristring').split(',')[1];
 
-                    // Backup PDF to Storage
                     try {
                         const storage = getStorage();
                         const pdfRef = ref(storage, `pdf_backups/PF${rawNumber}_EMERGENCY_CLOSED_${new Date().getTime()}.pdf`);
@@ -316,48 +364,49 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         const downloadUrl = await getDownloadURL(pdfRef);
                         updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl } as any;
                         await syncToFirebase(updatedPermit as Permit);
-                    } catch (storageError) {
-                        console.error("Backup PDF Error (Silent):", storageError);
-                    }
+                    } catch (storageError) { console.error("Backup PDF Error:", storageError); }
                     
-                    // Submit to CX
                     try {
                         await submitPermitToCX({ ...updatedPermit, itwocxNumber: rawNumber, issuerSignature: { data: `data:application/pdf;base64,${pdfBase64}` } }, `EB_Permit_PF${rawNumber}_EMERGENCY_CLOSED_${new Date().getTime()}.pdf`);
-                        await syncToFirebase({ ...updatedPermit, cxSyncPending: null, cxSyncError: null } as any);
-                        
-                        // 🟢 Cartel de éxito AHORA SÍ solo sale si no hay error
+                        await syncToFirebase({ ...updatedPermit, syncStatus: 'synced', cxSyncPending: null, cxSyncError: null } as any);
                         alert("🚨 PROTOCOL COMPLETE: Permit gracefully Closed and Synchronized with iTwoCX.");
-                    } catch (cxError: any) {
-                        console.error("CX Lodge Error:", cxError);
-                        await syncToFirebase({ ...updatedPermit, cxSyncPending: 'closure', cxSyncError: cxError.message } as any);
-                        
-                        // 🔴 Cartel de alerta si falla el firewall
-                        alert(`⚠️ ALERT: Permit was saved locally, but CX Sync Failed.\n\nError: ${cxError.message}`);
-                    }
+                    } catch (cxError: any) { throw cxError; }
                 }
             } else {
                 alert("Cease Works record updated (Suspended).");
                 setCeaseItem(''); setCeaseAction(''); setCeaseIssuerName(''); 
             }
         } catch (error: any) {
-            alert(`⚠️ PROTOCOL FAILED:\n${error.message}`); 
-        } finally {
-            setIsSubmitting(false);
-        }
+            if (ceaseAction === 'cancelled') {
+                // 🐛 SOLUCIÓN: Agregada la etiqueta syncStatus: 'pending'
+                const updatedPending = { ...updatedPermit, syncStatus: 'pending', cxSyncPending: 'closure', cxSyncError: error.message } as any;
+                await syncToFirebase(updatedPending);
+                alert(`⚠️ PROTOCOL SAVED LOCALLY. CX Sync Failed: ${error.message}`); 
+            } else {
+                alert(`⚠️ PROTOCOL FAILED:\n${error.message}`); 
+            }
+        } finally { setIsSubmitting(false); }
     };
 
     return (
         <>
+            {/* 🚀 BANNER GLOBAL OFFLINE */}
+            {!isOnline && (
+                <div className="fixed top-0 left-0 right-0 z-[10000] bg-red-600 text-white p-2 text-center text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg">
+                    <Wifi size={14} className="animate-pulse"/> No Internet Connection - Photos and PDF generation disabled
+                </div>
+            )}
+
             {isSubmitting && (
                 <div className="fixed inset-0 z-[9999] bg-gray-900/90 backdrop-blur-sm flex flex-col items-center justify-center text-white px-4">
                     <Loader2 size={80} className="animate-spin text-blue-500 mb-6" />
                     <h2 className="text-3xl font-black uppercase tracking-widest text-center">Processing...</h2>
                     <p className="text-gray-300 mt-4 text-center text-lg font-bold">Please do not close the application.</p>
-                    <p className="text-gray-400 mt-2 text-center text-sm">Generating PDF and syncing with servers...</p>
+                    <p className="text-gray-400 mt-2 text-center text-sm">Generating PDF and securing files...</p>
                 </div>
             )}
 
-            <div className="max-w-6xl mx-auto pb-12 mt-6 print:hidden relative z-10">
+            <div className={`max-w-6xl mx-auto pb-12 mt-6 print:hidden relative z-10 ${!isOnline ? 'mt-12' : ''}`}>
                 <div className="flex justify-between items-center mb-6">
                     <button onClick={onBack} className="text-gray-500 font-bold flex items-center gap-1"><ArrowLeft size={16}/> Back to Register</button>
                     <button onClick={() => window.print()} className="bg-gray-900 text-white px-5 py-2 rounded-xl font-bold shadow-lg flex items-center gap-2"><Printer size={18}/> Print Copy</button>
@@ -546,17 +595,44 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     ))}
                                 </div>
 
-                                <div className="bg-blue-50 p-8 rounded-2xl border-2 border-blue-200 mt-8 max-w-md mx-auto shadow-md">
-                                    <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest text-center mb-6 border-b border-blue-200 pb-2">Permit Approver Signature</h4>
-                                    {hasApproverSigned ? (
-                                        <div className="text-center bg-white p-6 rounded-xl border-2 border-green-500 shadow-inner">
-                                            <img src={permit.approverSignature!.data} className="h-16 mx-auto mix-blend-multiply mb-2" alt="sig" />
-                                            <p className="font-black uppercase text-gray-900 text-xs">{permit.approverSignature!.name}</p>
-                                            <div className="bg-green-600 text-white px-4 py-3 mt-4 rounded-xl font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg"><ShieldCheck size={20} /> Mechanical Approved</div>
-                                        </div>
-                                    ) : (
-                                        <SignaturePad label="Approver Name" onSave={handleApproverSign} />
-                                    )}
+                                <div className="bg-blue-50 p-6 md:p-8 rounded-2xl border-2 border-blue-200 mt-8 max-w-md mx-auto shadow-md">
+                                    <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest text-center mb-6 border-b border-blue-200 pb-2">Permit Approver Authorization</h4>
+                                    
+                                    <div className="mb-8 p-5 bg-white rounded-xl border border-blue-100 shadow-sm text-center">
+                                        <p className="text-xs font-black text-gray-700 uppercase mb-3 border-b border-gray-100 pb-2"><Camera size={14} className="inline mr-1 text-blue-600" /> Step 1: Mandatory Site Photo</p>
+                                        
+                                        {(permit as any).approverPhoto ? (
+                                            <div className="relative inline-block mt-2">
+                                                <img src={(permit as any).approverPhoto} className="h-32 w-32 object-cover rounded-xl border-4 border-green-500 shadow-md" alt="Inspection" />
+                                                {!hasApproverSigned && !isClosed && (
+                                                    <button onClick={() => syncToFirebase({...permit, approverPhoto: null} as any)} className="absolute -top-3 -right-3 bg-red-600 hover:bg-red-700 text-white p-2 rounded-full shadow-lg transition-transform hover:scale-110"><Trash2 size={16}/></button>
+                                                )}
+                                                <p className="text-[10px] font-black text-green-600 mt-3 uppercase tracking-widest flex justify-center items-center gap-1"><CheckCircle size={14}/> Photo Attached</p>
+                                            </div>
+                                        ) : (
+                                            <div className="mt-2">
+                                                <button onClick={() => approverCameraRef.current?.click()} disabled={isUploadingApproverPhoto || hasApproverSigned || isClosed || !isOnline} className={`bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-black text-sm uppercase shadow-lg flex items-center justify-center gap-3 w-full transition-all ${!isOnline ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}>
+                                                    {isUploadingApproverPhoto ? <Loader2 className="animate-spin" size={20}/> : <Camera size={20}/>}
+                                                    {isUploadingApproverPhoto ? 'Uploading Securely...' : 'Take Inspection Photo'}
+                                                </button>
+                                                <input ref={approverCameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleApproverPhotoUpload} />
+                                                <p className="text-[10px] text-red-600 font-bold mt-3 uppercase tracking-wide bg-red-50 py-1.5 rounded-md border border-red-100 shadow-inner">⚠️ Required before signing</p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className={!(permit as any).approverPhoto ? "opacity-30 pointer-events-none filter grayscale transition-all duration-300" : "animate-fade-in transition-all duration-300"}>
+                                        <p className="text-xs font-black text-gray-700 uppercase mb-3 border-b border-gray-100 pb-2 text-center"><ShieldCheck size={14} className="inline mr-1 text-blue-600" /> Step 2: Authorize Works</p>
+                                        {hasApproverSigned ? (
+                                            <div className="text-center bg-white p-6 rounded-xl border-2 border-green-500 shadow-inner">
+                                                <img src={permit.approverSignature!.data} className="h-16 mx-auto mix-blend-multiply mb-2" alt="sig" />
+                                                <p className="font-black uppercase text-gray-900 text-xs">{permit.approverSignature!.name}</p>
+                                                <div className="bg-green-600 text-white px-4 py-3 mt-4 rounded-xl font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg"><ShieldCheck size={20} /> Mechanical Approved</div>
+                                            </div>
+                                        ) : (
+                                            <SignaturePad label="Approver Name" onSave={handleApproverSign} />
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -633,7 +709,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                             <div className="border-4 border-dashed border-gray-300 p-8 rounded-[2rem] text-center bg-gray-50/50 hover:bg-gray-50 transition-colors animate-fade-in relative z-10">
                                 <input type="text" placeholder="Type a descriptive caption for the photo..." className={inputClass + " mb-6 max-w-md mx-auto text-center"} value={photoCaption} onChange={e => setPhotoCaption(e.target.value)} />
                                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                                    <button onClick={() => cameraInputRef.current?.click()} disabled={isUploadingPhoto} className="text-white px-8 py-4 rounded-xl font-black uppercase bg-blue-800 hover:bg-blue-900 shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-[1.02]">{isUploadingPhoto ? <Loader2 className="animate-spin"/> : <Camera size={20}/>} Take / Upload Photo</button>
+                                    <button onClick={() => cameraInputRef.current?.click()} disabled={isUploadingPhoto || !isOnline} className={`text-white px-8 py-4 rounded-xl font-black uppercase shadow-lg flex items-center justify-center gap-2 transition-all ${!isOnline ? 'bg-gray-400 opacity-50 cursor-not-allowed' : 'bg-blue-800 hover:bg-blue-900 hover:scale-[1.02]'}`}>
+                                        {isUploadingPhoto ? <Loader2 className="animate-spin"/> : <Camera size={20}/>} Take / Upload Photo
+                                    </button>
                                 </div>
                                 <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
                             </div>
@@ -659,11 +737,22 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                             {ceaseItem && !permit.ceaseWorksRecord && (
                                 <div className="bg-white p-8 rounded-2xl border-2 border-red-300 shadow-xl animate-fade-in">
                                     <h4 className="text-red-800 font-black uppercase tracking-widest mb-6 border-b border-red-100 pb-2">Execute Cease Works PROTOCOL</h4>
+                                    
+                                    {!isOnline && ceaseAction === 'cancelled' && (
+                                        <div className="bg-red-100 text-red-800 p-3 rounded-lg mb-4 text-sm font-bold flex items-center gap-2">
+                                            <Wifi size={20} /> You are offline. Internet connection is required to generate the Emergency Protocol PDF.
+                                        </div>
+                                    )}
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                                         <div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Action Required</label><select className={inputClass} value={ceaseAction} onChange={e => setCeaseAction(e.target.value as any)}><option value="">- Select Action -</option><option value="cancelled">Cancel / Revoke Permit immediately</option></select></div>
                                         <div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Issuer Name</label><input type="text" className={inputClass} value={ceaseIssuerName} onChange={e => setCeaseIssuerName(e.target.value)} placeholder="Authorizing Issuer..." /></div>
                                     </div>
-                                    {(ceaseAction && ceaseIssuerName) && <SignaturePad label="Issuer Signature to Confirm Protocol" onSave={handleCeaseWorksSave} externalName={ceaseIssuerName} />}
+                                    {(ceaseAction && ceaseIssuerName) && (
+                                        <div className={!isOnline && ceaseAction === 'cancelled' ? 'opacity-50 pointer-events-none' : ''}>
+                                            <SignaturePad label="Issuer Signature to Confirm Protocol" onSave={handleCeaseWorksSave} externalName={ceaseIssuerName} />
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -691,7 +780,14 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     <div className="border-t-2 border-gray-100 pt-8">
                                         <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">Identify to Close (Type Full Name of Active Receiver)</label>
                                         <input type="text" className={inputClass + " mb-6 py-3 text-lg text-center uppercase border-gray-400"} placeholder={currentReceiverName} value={closureReceiverName} onChange={e => setClosureReceiverName(e.target.value)} />
-                                        <button onClick={handleAutomatedCloseAndLodge} disabled={isSubmitting} className={`w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-200 text-gray-500 shadow-none' : 'bg-red-600 text-white shadow-xl hover:bg-red-700 hover:scale-[1.02] active:scale-[0.98]'}`}>
+                                        
+                                        {!isOnline && (
+                                            <div className="bg-red-100 text-red-800 p-3 rounded-lg mb-4 text-xs font-bold flex items-center justify-center gap-2 text-center shadow-inner">
+                                                <Wifi size={16} className="shrink-0"/> INTERNET REQUIRED: You cannot close the permit offline because the final 12-page PDF must be uploaded directly to the cloud.
+                                            </div>
+                                        )}
+
+                                        <button onClick={handleAutomatedCloseAndLodge} disabled={isSubmitting || !isOnline} className={`w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting || !isOnline ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed' : 'bg-red-600 text-white shadow-xl hover:bg-red-700 hover:scale-[1.02] active:scale-[0.98]'}`}>
                                             {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CloudUpload size={28} />}
                                             {isSubmitting ? 'Generating PDF & Syncing...' : 'Close Permit & Finalize'}
                                         </button>

@@ -53,7 +53,7 @@ const safeParseJSON = async (response: Response, step: string) => {
 // 📄 MÓDULO DE DOCUMENTOS (Basado estrictamente en Swagger Document)
 // ============================================================================
 
-export const cxGetByReference = functions.https.onRequest((req, res) => {
+export const cxGetByReference = functions.https.onRequest((req: any, res: any) => {
     corsHandler(req, res, async () => {
         try {
             const { projectCode, reference } = req.query;
@@ -74,7 +74,7 @@ export const cxGetByReference = functions.https.onRequest((req, res) => {
     });
 });
 
-export const cxIssuePermit = functions.https.onRequest((req, res) => {
+export const cxIssuePermit = functions.https.onRequest((req: any, res: any) => {
     corsHandler(req, res, async () => {
         try {
             const { projectCode, reference } = req.query;
@@ -110,12 +110,12 @@ export const cxIssuePermit = functions.https.onRequest((req, res) => {
     });
 });
 
-export const cxChangeStatus = functions.https.onRequest((req, res) => {
+export const cxChangeStatus = functions.https.onRequest((req: any, res: any) => {
     corsHandler(req, res, async () => {
         try {
             const { projectCode } = req.query;
             const sessionKey = req.headers['x-cx-session-key'] || req.query.sessionKey;
-            const payload = req.body; 
+            const payload = req.body;
 
             if (!projectCode || !payload) return res.status(400).send({ error: "Missing data" });
             if (!sessionKey) return res.status(401).send({ error: "Unauthorized: Missing sessionKey." });
@@ -143,12 +143,12 @@ export const cxChangeStatus = functions.https.onRequest((req, res) => {
 // 📎 MÓDULO DE ADJUNTOS (Basado estrictamente en Swagger Attachment Upload)
 // ============================================================================
 
-export const cxUploadAttachment = functions.https.onRequest((req, res) => {
+export const cxUploadAttachment = functions.https.onRequest((req: any, res: any) => {
     corsHandler(req, res, async () => {
         try {
             const { projectCode, documentId } = req.query;
             const sessionKey = req.headers['x-cx-session-key'] || req.query.sessionKey;
-            const payload = req.body; 
+            const payload = req.body;
 
             if (!projectCode || !documentId || !payload || !payload.Content) {
                 return res.status(400).send({ error: "Missing required data (projectCode, documentId, or Content)." });
@@ -178,7 +178,7 @@ export const cxUploadAttachment = functions.https.onRequest((req, res) => {
 // 🔐 MÓDULO DE AUTENTICACIÓN (Basado estrictamente en Swagger Login)
 // ============================================================================
 
-export const cxLogin = functions.https.onRequest((req, res) => {
+export const cxLogin = functions.https.onRequest((req: any, res: any) => {
     corsHandler(req, res, async () => {
         try {
             if (req.method !== 'POST') return res.status(405).send({ error: "Method Not Allowed" });
@@ -190,14 +190,14 @@ export const cxLogin = functions.https.onRequest((req, res) => {
             }
 
             const encryptUrl = `${CX_API_BASE}/Login/EncryptPassword`;
-            
+
             const encryptRes = await fetch(encryptUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "Accept": "application/json"
                 },
-                body: JSON.stringify({ Password: password }) 
+                body: JSON.stringify({ Password: password })
             });
 
             const encryptedPasswordRaw = await encryptRes.text();
@@ -209,7 +209,7 @@ export const cxLogin = functions.https.onRequest((req, res) => {
             const cleanEncryptedPassword = encryptedPasswordRaw.replace(/^"|"$/g, '');
 
             if (!cleanEncryptedPassword || cleanEncryptedPassword === "null") {
-                 throw new Error(`[Encrypt API] Devuelve null o vacío. Revisa la contraseña.`);
+                throw new Error(`[Encrypt API] Devuelve null o vacío. Revisa la contraseña.`);
             }
 
             const loginUrl = `${CX_API_BASE}/Login/ByEmail`;
@@ -256,7 +256,7 @@ const transporter = nodemailer.createTransport({
 });
 
 // 🚀 LISTA DE DISTRIBUCIÓN MAESTRA PARA ERRORES DE SISTEMA
-const ALERT_EMAILS = 'dietrich.truchsess@easternbusway.nz'; 
+const ALERT_EMAILS = 'dietrich.truchsess@easternbusway.nz';
 
 export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}', async (event: any) => {
     if (!event.data) return;
@@ -347,7 +347,7 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
                 const approvers = roleAssignments
                     .filter((u: any) => u.role === 'Approver')
                     .map((u: any) => u.email);
-                
+
                 if (approvers.length > 0) {
                     approverEmailsList = approvers.join(', ');
                 }
@@ -381,7 +381,7 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
                     <div style="margin: 35px 0; text-align: center;">
                         <a href="https://eba-digital-permits.web.app/#/permit/${permitId}" 
                            style="background-color: #1d4ed8; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 900; font-size: 14px; display: inline-block; letter-spacing: 1px; text-transform: uppercase;">
-                           Review & Sign Part B
+                            Review & Sign Part B
                         </a>
                     </div>
 
@@ -399,4 +399,61 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
             console.error('[ERROR] Failed to send approver notification:', error);
         }
     }
+});
+
+// ============================================================================
+// 📥 MÓDULO DE WEBHOOK RECEPCIÓN (iTwoCX -> Can You Dig It)
+// ============================================================================
+
+export const cxIncomingWebhook = functions.https.onRequest((req: any, res: any) => {
+    corsHandler(req, res, async () => {
+        if (req.method !== "POST") {
+            return res.status(405).send({ error: "Method Not Allowed. This webhook only accepts POST requests." });
+        }
+
+        try {
+            console.log("📥 ¡Mensaje Webhook recibido desde iTwoCX!", req.body);
+
+            const cxData = req.body || {};
+
+            // 🚀 Generamos un ID único usando la estructura nativa de Firebase para evitar problemas de compatibilidad
+            const permitId = db.collection("permits").doc().id;
+
+            const permitNumber = cxData.DocumentReference || cxData.DocumentId || `NEW-${Date.now()}`;
+            const location = cxData.Location || cxData.Area || "Location Pending";
+            const requestedBy = cxData.CreatedBy || cxData.Author || "iTwoCX System";
+
+            // Construir el esqueleto del Permiso DRAFT para la App
+            const newDraftPermit = {
+                id: permitId,
+                permitNumber: permitNumber,
+                itwocxNumber: permitNumber,
+                location: location,
+                excavationType: "mechanical", // Valor por defecto
+                status: "draft",             // ¡Crucial! Entra como borrador
+                isDraft: true,
+                createdAt: new Date().toISOString(),
+                cxSyncPending: null,
+                cxSyncError: null,
+                syncStatus: "synced",
+                otherNotes: `Borrador generado automáticamente mediante Webhook desde iTwoCX.\nSolicitado por: ${requestedBy}`
+            };
+
+            // Guardar en Firestore
+            await db.collection("permits").doc(permitId).set(newDraftPermit);
+
+            console.log(`✅ Permiso DRAFT PF#${permitNumber} creado con éxito en Firestore vía Webhook.`);
+
+            // Responder a CX para que sepa que recibimos el mensaje exitosamente
+            return res.status(200).send({
+                success: true,
+                message: "Draft successfully created in Can You Dig It.",
+                permitId: permitId
+            });
+
+        } catch (error: any) {
+            console.error("❌ Error procesando el Webhook de CX:", error);
+            return res.status(500).send({ error: error.message || "Internal Server Error processing the webhook." });
+        }
+    });
 });

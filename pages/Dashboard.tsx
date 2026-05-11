@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, doc, deleteDoc } from 'firebase/firestore'; 
 import { db } from '../firebase'; 
-import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X } from 'lucide-react'; 
+import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff } from 'lucide-react'; 
 import { getCurrentUserEmail } from '../services/cx';
 
 const permitCategories = [
@@ -20,7 +20,6 @@ const permitCategories = [
 
 const MASTER_SECURITY_PIN = "CX-Master-2026"; 
 
-// 🚀 DEFINICIÓN MAESTRA DE COLUMNAS (Estilo CX)
 const ALL_COLUMNS = [
   { id: 'reference', label: 'Reference', alwaysVisible: true },
   { id: 'type', label: 'Permit Type', alwaysVisible: false },
@@ -45,7 +44,6 @@ export const Dashboard = () => {
   const currentUser = getCurrentUserEmail().toLowerCase();
   const isSuperAdmin = currentUser.includes('dietrich') || currentUser.includes('eba-dt');
 
-  // 🚀 ESTADOS DE LA TABLA DINÁMICA (CX Style)
   const [selectedColumns, setSelectedColumns] = useState<string[]>(['reference', 'type', 'location', 'status', 'action']);
   const [showColumnSelector, setShowColumnSelector] = useState(false);
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
@@ -58,13 +56,11 @@ export const Dashboard = () => {
     try {
       const querySnapshot = await getDocs(collection(db, 'permits'));
       const permitsFromCloud: any[] = [];
-      querySnapshot.forEach((doc) => permitsFromCloud.push(doc.data()));
+      querySnapshot.forEach((doc) => permitsFromCloud.push({ id: doc.id, ...doc.data() }));
 
-      if (permitsFromCloud.length > 0) {
-        localStorage.setItem('eba_permits_db_v3', JSON.stringify(permitsFromCloud));
-      }
       permitsFromCloud.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       setSavedPermits(permitsFromCloud);
+      localStorage.setItem('eba_permits_db_v3', JSON.stringify(permitsFromCloud));
     } catch (error) {
       console.error("Error fetching from Firebase:", error);
       const rawData = localStorage.getItem('eba_permits_db_v3');
@@ -79,7 +75,12 @@ export const Dashboard = () => {
     }
   };
 
-  useEffect(() => { loadPermits(); }, []);
+  useEffect(() => { 
+    loadPermits(); 
+    // Suscripción simple para actualizar si el motor de fondo cambia algo
+    const interval = setInterval(loadPermits, 15000); 
+    return () => clearInterval(interval);
+  }, []);
 
   const handleCategoryClick = (code: string) => {
     if (code === 'EX') navigate('/new');
@@ -105,7 +106,6 @@ export const Dashboard = () => {
     }
   };
 
-  // 🚀 EXTRACCIÓN DINÁMICA DE OPCIONES PARA LOS FILTROS
   const filterOptions = useMemo(() => {
     return {
       status: ['DRAFT', 'ACTIVE', 'CLOSED'],
@@ -116,7 +116,6 @@ export const Dashboard = () => {
     };
   }, [savedPermits]);
 
-  // 🚀 LÓGICA DE FILTRADO MULTICRITERIO CX
   const filteredPermits = savedPermits.filter(p => {
     const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
     
@@ -156,7 +155,6 @@ export const Dashboard = () => {
   return (
     <div className="min-h-screen bg-gray-50 p-6 relative">
       
-      {/* MODAL DE SEGURIDAD (BÓVEDA) */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl border-t-4 border-red-600 p-6">
@@ -202,12 +200,10 @@ export const Dashboard = () => {
           </div>
         </div>
 
-        {/* 🚀 ZONA DE LA TABLA DINÁMICA ESTILO CX */}
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b pb-2 relative">
               <h2 className="text-2xl font-bold text-gray-900">Cloud Synced Permits</h2>
               
-              {/* BOTÓN COLUMNAS (CX Style) */}
               <div className="relative">
                 <button 
                   onClick={() => setShowColumnSelector(!showColumnSelector)}
@@ -247,7 +243,6 @@ export const Dashboard = () => {
                         <th key={col.id} className="p-4 relative group">
                           <div className="flex items-center gap-2">
                             {col.label}
-                            {/* ICONO DE EMBUDO CX STYLE */}
                             {hasFilter && (
                               <button 
                                 onClick={() => setActiveFilterMenu(activeFilterMenu === col.id ? null : col.id)}
@@ -258,7 +253,6 @@ export const Dashboard = () => {
                             )}
                           </div>
 
-                          {/* DROPDOWN DEL FILTRO (Aparece bajo la columna) */}
                           {activeFilterMenu === col.id && (
                              <div className="absolute left-4 top-12 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden font-normal normal-case tracking-normal text-gray-900 animate-in fade-in slide-in-from-top-1">
                                 <div className="p-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
@@ -266,7 +260,7 @@ export const Dashboard = () => {
                                    <button onClick={() => setActiveFilterMenu(null)} className="text-gray-400 hover:text-red-500"><X size={14}/></button>
                                 </div>
                                 <div className="max-h-48 overflow-y-auto p-1">
-                                    {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
+                                   {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
                                       <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
                                         {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600"/> : <Square size={16} className="text-gray-300"/>}
                                         {opt}
@@ -314,9 +308,26 @@ export const Dashboard = () => {
                           
                           {selectedColumns.includes('status') && (
                             <td className="p-4">
-                              <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${pStatus === 'CLOSED' ? 'bg-red-100 text-red-800' : (pStatus === 'DRAFT' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>
-                                {pStatus}
-                              </span>
+                              <div className="flex flex-col gap-1">
+                                <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider text-center ${pStatus === 'CLOSED' ? 'bg-red-100 text-red-800' : (pStatus === 'DRAFT' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>
+                                  {pStatus}
+                                </span>
+                                
+                                {/* 🚀 INDICADOR DE COLA DE SINCRONIZACIÓN */}
+                                {p.syncStatus === 'pending' && (
+                                  <span className="animate-pulse bg-amber-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full flex items-center justify-center gap-1 uppercase">
+                                    <RefreshCw size={8} className="animate-spin" /> Sync Queue
+                                  </span>
+                                )}
+
+                                {/* 🚀 INDICADOR DE ERROR DE SINCRONIZACIÓN */}
+                                {p.cxSyncError && (
+                                  <div className="flex items-center gap-1 text-red-600" title={p.cxSyncError}>
+                                    <CloudOff size={10} />
+                                    <span className="text-[7px] font-bold uppercase truncate max-w-[80px]">Sync Error</span>
+                                  </div>
+                                )}
+                              </div>
                             </td>
                           )}
 

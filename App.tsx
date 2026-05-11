@@ -4,10 +4,11 @@ import { Dashboard } from './pages/Dashboard';
 import NewPermit from './pages/NewPermit';
 import PermitDetail from './pages/PermitDetail';
 import { UnderConstruction } from './pages/UnderConstruction';
-import { Settings as SettingsPage } from './pages/Settings'; // 🚀 IMPORT NUEVO
-import { logoutCX, getUserRole, getCurrentUserEmail, getActiveSessionKey } from './services/cx';
+import { Settings as SettingsPage } from './pages/Settings'; 
+import { logoutCX, getUserRole, getCurrentUserEmail, getActiveSessionKey, processSyncQueue } from './services/cx'; // 🚀 MOTOR IMPORTADO
 import { LoginModal } from './components/LoginModal'; 
-import { LogOut, Loader2, Settings as SettingsIcon } from 'lucide-react'; // 🚀 ICONO DE SETTINGS
+import { DemoBanner } from './components/DemoBanner'; // 🚨 IMPORTACIÓN DEL ESCUDO VISUAL
+import { LogOut, Loader2, Settings as SettingsIcon } from 'lucide-react'; 
 import ebLogo from './assets/eb-logo.png';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
@@ -24,6 +25,7 @@ const App: React.FC = () => {
   const [userEmail, setUserEmail] = useState('');
   const [isCheckingSession, setIsCheckingSession] = useState(true);
 
+  // 1️⃣ Verificación de Sesión de Firebase
   useEffect(() => {
     const auth = getAuth();
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -46,6 +48,24 @@ const App: React.FC = () => {
 
     return () => unsubscribe();
   }, []);
+
+  // 2️⃣ 🚀 EL MOTOR FANTASMA DE AUTO-SINCRONIZACIÓN
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    console.log("⚙️ Motor Fantasma Activado: Vigilando la cola de sincronización...");
+    
+    // Corremos la primera revisión al entrar
+    processSyncQueue();
+
+    // Arrancamos el loop infinito: Revisar la cola cada 10 segundos
+    const syncInterval = setInterval(() => {
+       processSyncQueue();
+    }, 10000); 
+
+    // Limpieza al desmontar
+    return () => clearInterval(syncInterval);
+  }, [isAuthenticated]);
 
   const handleLoginSuccess = (email: string) => {
     setIsAuthenticated(true);
@@ -97,6 +117,7 @@ const App: React.FC = () => {
 
   return (
     <HashRouter>
+      <DemoBanner /> {/* 🚀 BARRA DE ADVERTENCIA EN LA CIMA (Se oculta sola en modo LIVE) */}
       <div className="min-h-screen bg-gray-50 flex flex-col">
         <div className="bg-white border-b-4 border-brand-900 p-3 flex justify-between items-center shadow-md shrink-0">
           <div className="flex items-center gap-4">
@@ -135,7 +156,7 @@ const App: React.FC = () => {
             <Route path="/new" element={<NewPermit onCancel={() => window.location.hash = '#/'} onComplete={() => window.location.hash = '#/'} />} />
             <Route path="/permit/:id" element={<PermitDetailContainer />} />
             <Route path="/under-construction" element={<UnderConstruction />} />
-            <Route path="/settings" element={<SettingsPage />} /> {/* 🚀 NUEVA RUTA */}
+            <Route path="/settings" element={<SettingsPage />} /> 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

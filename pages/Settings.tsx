@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { ArrowLeft, Save, Shield, Users, Building, Plus, Trash2, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Shield, Users, Building, Plus, Trash2, Loader2, Activity } from 'lucide-react';
 import { getCurrentUserEmail } from '../services/cx';
+import { ModeToggle } from '../components/ModeToggle'; // 🚀 IMPORTACIÓN DEL BOTÓN MAESTRO
 
 interface AppSettings {
   companyName: string;
@@ -114,6 +115,16 @@ export const Settings: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 gap-8">
+          
+          {/* 🚀 MODO DEL SISTEMA (SWITCH LIVE/DEMO) */}
+          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div>
+              <h2 className="text-xl font-bold text-gray-800 mb-2 flex items-center gap-2"><Activity className="text-orange-500"/> System Dimension</h2>
+              <p className="text-sm text-gray-500 max-w-md">Toggle the entire application between LIVE (Production) and DEMO (Testing) modes. This affects where the permits are sent in iTwoCX.</p>
+            </div>
+            <ModeToggle />
+          </div>
+
           {/* GENERAL SETTINGS */}
           <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
             <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2 border-b pb-2"><Building className="text-blue-600"/> General Platform Settings</h2>
@@ -123,8 +134,9 @@ export const Settings: React.FC = () => {
                 <input type="text" value={settings.companyName} onChange={e => setSettings({...settings, companyName: e.target.value})} className="w-full bg-gray-50 border border-gray-300 rounded-lg px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
               <div>
-                <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">iTwoCX Project Code</label>
+                <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">Default iTwoCX Project Code</label>
                 <input type="text" value={settings.projectCode} onChange={e => setSettings({...settings, projectCode: e.target.value})} className="w-full bg-gray-50 border border-gray-300 rounded-lg px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
+                <p className="text-[10px] text-gray-400 mt-1 uppercase">Overridden by the System Dimension toggle above.</p>
               </div>
             </div>
           </div>
