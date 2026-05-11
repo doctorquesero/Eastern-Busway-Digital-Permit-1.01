@@ -9,8 +9,8 @@ export const ModeToggle: React.FC = () => {
         
         // Medida de seguridad: Confirmación antes de cambiar
         const confirmMessage = newMode === 'DEMO' 
-            ? "¿Seguro que quieres pasar a MODO PRUEBA? (Se mostrará un banner naranja en toda la app)" 
-            : "¿Seguro que quieres activar el MODO LIVE? (Los permisos irán al servidor oficial de EBA)";
+            ? "Are you sure you want to switch to DEMO MODE? (An orange banner will be displayed across the app)" 
+            : "Are you sure you want to activate LIVE MODE? (Permits will be sent to the official EBA server)";
             
         if (window.confirm(confirmMessage)) {
             setAppMode(newMode);
@@ -22,8 +22,8 @@ export const ModeToggle: React.FC = () => {
 
     return (
         <div style={{ padding: '20px', border: '2px solid #e5e7eb', borderRadius: '8px', maxWidth: '300px', backgroundColor: '#f9fafb' }}>
-            <h3 style={{ marginTop: 0, color: '#111827' }}>⚙️ Modo iTwoCX</h3>
-            <p style={{ color: '#4b5563', marginBottom: '15px' }}>Estado actual: <strong style={{ color: mode === 'LIVE' ? '#16a34a' : '#ea580c' }}>{mode}</strong></p>
+            <h3 style={{ marginTop: 0, color: '#111827' }}>⚙️ iTwoCX Mode</h3>
+            <p style={{ color: '#4b5563', marginBottom: '15px' }}>Current State: <strong style={{ color: mode === 'LIVE' ? '#16a34a' : '#ea580c' }}>{mode}</strong></p>
             <button 
                 onClick={handleToggle}
                 style={{
@@ -39,7 +39,7 @@ export const ModeToggle: React.FC = () => {
                     letterSpacing: '0.5px'
                 }}
             >
-                Cambiar a {mode === 'LIVE' ? 'DEMO' : 'LIVE'}
+                SWITCH TO {mode === 'LIVE' ? 'DEMO' : 'LIVE'}
             </button>
         </div>
     );
