@@ -84,6 +84,7 @@ export const Dashboard = () => {
 
   const handleCategoryClick = (code: string) => {
     if (code === 'EX') navigate('/new');
+    else if (code === 'PU') navigate('/new-pump');
     else navigate('/under-construction');
   };
 
@@ -299,7 +300,11 @@ export const Dashboard = () => {
                           )}
                           
                           {selectedColumns.includes('type') && (
-                            <td className="p-4 font-bold text-gray-700">{p.excavationType ? String(p.excavationType).toUpperCase() : 'UNKNOWN'}</td>
+                            <td className="p-4 font-bold text-gray-700">
+                                {p.permitType === 'pump' 
+                                    ? <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md text-[10px] font-black uppercase tracking-wider">PUMP</span>
+                                    : (p.excavationType ? String(p.excavationType).toUpperCase() : 'UNKNOWN')}
+                            </td>
                           )}
                           
                           {selectedColumns.includes('location') && (
@@ -350,7 +355,7 @@ export const Dashboard = () => {
                           {selectedColumns.includes('action') && (
                             <td className="p-4 text-center">
                               <div className="flex items-center justify-center gap-2">
-                                <button onClick={() => navigate(`/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">
+                                <button onClick={() => navigate(p.permitType === 'pump' ? `/pump-permit/${p.id}` : `/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">
                                   Open
                                 </button>
                                 {isSuperAdmin && (

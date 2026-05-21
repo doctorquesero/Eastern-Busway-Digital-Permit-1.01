@@ -3,6 +3,8 @@ import { HashRouter, Routes, Route, Navigate, useNavigate, useParams } from 'rea
 import { Dashboard } from './pages/Dashboard';
 import NewPermit from './pages/NewPermit';
 import PermitDetail from './pages/PermitDetail';
+import NewPumpPermit from './pages/NewPumpPermit';
+import PumpPermitDetail from './pages/PumpPermitDetail';
 import { UnderConstruction } from './pages/UnderConstruction';
 import { Settings as SettingsPage } from './pages/Settings'; 
 import { logoutCX, getUserRole, getCurrentUserEmail, getActiveSessionKey, processSyncQueue } from './services/cx'; // 🚀 MOTOR IMPORTADO
@@ -17,6 +19,13 @@ const PermitDetailContainer = () => {
   const navigate = useNavigate();
   if (!id) return <Navigate to="/" replace />;
   return <PermitDetail id={id} onBack={() => navigate('/')} />;
+};
+
+const PumpPermitDetailContainer = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  if (!id) return <Navigate to="/" replace />;
+  return <PumpPermitDetail id={id} onBack={() => navigate('/')} />;
 };
 
 const App: React.FC = () => {
@@ -155,6 +164,8 @@ const App: React.FC = () => {
             <Route path="/" element={<Dashboard />} />
             <Route path="/new" element={<NewPermit onCancel={() => window.location.hash = '#/'} onComplete={() => window.location.hash = '#/'} />} />
             <Route path="/permit/:id" element={<PermitDetailContainer />} />
+            <Route path="/new-pump" element={<NewPumpPermit onCancel={() => window.location.hash = '#/'} onComplete={() => window.location.hash = '#/'} />} />
+            <Route path="/pump-permit/:id" element={<PumpPermitDetailContainer />} />
             <Route path="/under-construction" element={<UnderConstruction />} />
             <Route path="/settings" element={<SettingsPage />} /> 
             <Route path="*" element={<Navigate to="/" replace />} />

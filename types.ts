@@ -25,6 +25,20 @@ export interface DailySignOff {
     spotterSig: Signature | null;
 }
 
+export interface MonitoringLogEntry {
+    id: string;
+    time: string;
+    mon: string;
+    tue: string;
+    wed: string;
+    thu: string;
+    fri: string;
+    staffMember: string;
+    monitoringLocation: string;
+    comments: string;
+}
+
+
 export interface PermitPhoto {
     id: string;
     url: string;
@@ -78,6 +92,7 @@ export interface Permit {
     id: string;
     permitNumber: string;
     itwocxNumber?: string;
+    permitType?: 'excavation' | 'pump';
     status: 'draft' | 'active' | 'closed';
     createdAt: string;
     
@@ -137,6 +152,37 @@ export interface Permit {
     closureChecklistAsBuiltReturned?: boolean;
     closureChecklistOutstandingWorks?: boolean;
     closureOutstandingWorksDetails?: string;
+
+    // Pump Permit Specific Fields
+    projectName?: string;
+    requestingCompany?: string;
+    dewateringLocation?: string;
+    areaDescription?: string;
+
+    personInChargeName?: string;
+    personInChargeContact?: string;
+    personInChargePosition?: string;
+
+    impurities?: string;
+    dischargePoint?: string;
+    pumpSizeRateVolume?: string;
+    pumpingHours?: string;
+    startDate?: string;
+    expiryDate?: string;
+
+    pumpInletControls?: string;
+    pumpOutletControls?: string;
+    sedimentControlPoint?: string;
+    dischargeCriteria?: string;
+    monitoringLocation?: string;
+    monitoringFrequency?: string;
+    otherMonitoringRequirements?: string;
+    personResponsibleForMonitoring?: string;
+    reqClarity?: boolean;
+    reqPh?: boolean;
+    reqSheen?: boolean;
+
+    monitoringLogs?: MonitoringLogEntry[];
 }
 
 // ==========================================
