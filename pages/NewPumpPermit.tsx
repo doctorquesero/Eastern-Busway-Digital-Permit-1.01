@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { ArrowLeft, CheckCircle, Camera, ImageIcon, Loader2, Trash2, Briefcase, ShieldCheck, Users, CloudUpload } from 'lucide-react';
-import { Permit, PermitPhoto } from '../types';
+import { ArrowLeft, CheckCircle, Camera, ImageIcon, Loader2, Trash2, Briefcase, ShieldCheck, Users, CloudUpload, FileCheck, Plus } from 'lucide-react';
+import { Permit, PermitPhoto, MonitoringLogEntry } from '../types';
 import { generatePermitNumber, savePermit, getPermits } from '../services/storage';
 import SignaturePad from '../components/SignaturePad';
 import { issuePermitToCX, getUserRole } from '../services/cx';  
@@ -37,7 +37,7 @@ const compressImage = (file: File): Promise<string> => {
 };
 
 const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) => {
-    const [activeTab, setActiveTab] = useState<'details' | 'receiver' | 'photos' | 'issuer'>('details');
+    const [activeTab, setActiveTab] = useState<'details' | 'receiver' | 'photos' | 'issuer' | 'monitoring' | 'closeout'>('details');
 
     const [formData, setFormData] = useState<Permit>({
         id: crypto.randomUUID(),
@@ -86,6 +86,24 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
     const isIssuer = sessionRole.includes('issuer') || isMaster;
 
     const updateField = (field: keyof Permit, value: any) => setFormData(prev => ({ ...prev, [field]: value }));
+
+    const addMonitoringLog = () => {
+        const newLog: MonitoringLogEntry = {
+            id: crypto.randomUUID(),
+            time: new Date().toTimeString().split(' ')[0].substring(0, 5),
+            mon: '', tue: '', wed: '', thu: '', fri: '',
+            staffMember: '', monitoringLocation: '', comments: ''
+        };
+        setFormData(prev => ({ ...prev, monitoringLogs: [...(prev.monitoringLogs || []), newLog] }));
+    };
+
+    const updateMonitoringLog = (logId: string, field: keyof MonitoringLogEntry, value: any) => {
+        setFormData(prev => ({ ...prev, monitoringLogs: (prev.monitoringLogs || []).map(log => log.id === logId ? { ...log, [field]: value } : log) }));
+    };
+
+    const removeMonitoringLog = (logId: string) => {
+        setFormData(prev => ({ ...prev, monitoringLogs: (prev.monitoringLogs || []).filter(log => log.id !== logId) }));
+    };
 
     const validateDetailsComplete = (): boolean => {
         if (!formData.itwocxNumber || !formData.dewateringLocation || !formData.projectName || !formData.requestingCompany) return false;
@@ -225,6 +243,12 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                 <button onClick={() => setActiveTab('issuer')} className={`px-4 md:px-6 py-4 text-[10px] md:text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'issuer' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>
                     <ShieldCheck size={16} /> 3. Issuer {isIssuerDone && <CheckCircle size={14} className="text-green-500"/>}
                 </button>
+                <button onClick={() => setActiveTab('monitoring')} className={`px-4 md:px-6 py-4 text-[10px] md:text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'monitoring' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>
+                    <FileCheck size={16} /> Daily Monitoring
+                </button>
+                <button onClick={() => setActiveTab('closeout')} className={`px-4 md:px-6 py-4 text-[10px] md:text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'closeout' ? 'text-red-700 border-b-4 border-red-600 bg-red-50' : 'text-gray-400 hover:bg-gray-50'}`}>
+                    <ShieldCheck size={16} /> Closeout
+                </button>
             </div>
 
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-5 sm:p-8 mb-6 relative">
@@ -359,6 +383,125 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                             {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CheckCircle size={28} />}
                             {isSubmitting ? 'Lodging PDF to iTwoCX...' : 'Issue Permit to CX'}
                         </button>
+                    </div>
+                </div>
+
+                <div className={activeTab === 'monitoring' ? 'block animate-fade-in' : 'hidden'}>
+                    <ReadOnlyPermitHeader />
+                    <div className="flex justify-between items-start mb-6">
+                        <h3 className="font-black text-xl text-gray-800 uppercase mb-2">Daily Monitoring</h3>
+                        <button onClick={addMonitoringLog} className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shrink-0">
+                            <Plus size={16}/> Add Log Entry
+                        </button>
+                    </div>
+
+                    <div className="border border-gray-300 mb-6 bg-white shadow-sm overflow-hidden text-sm">
+                        <div className="grid grid-cols-[200px_1fr] border-b border-gray-300">
+                            <div className="bg-green-200 font-bold p-3 border-r border-gray-300">Monitoring requirements</div>
+                            <div className="p-3 bg-gray-50 flex flex-col gap-2">
+                                <label className="flex items-center gap-2 cursor-pointer font-bold">
+                                    <input type="checkbox" checked={formData.reqClarity || false} onChange={e => updateField('reqClarity', e.target.checked)} className="w-4 h-4 text-green-600 rounded bg-green-200 border-green-400" /> 
+                                    Clarity {'>'}100mm visibility
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer font-bold">
+                                    <input type="checkbox" checked={formData.reqPh || false} onChange={e => updateField('reqPh', e.target.checked)} className="w-4 h-4 text-green-600 rounded bg-green-200 border-green-400" /> 
+                                    pH is between 5.5 & 8.5
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer font-bold">
+                                    <input type="checkbox" checked={formData.reqSheen || false} onChange={e => updateField('reqSheen', e.target.checked)} className="w-4 h-4 text-green-600 rounded bg-green-200 border-green-400" /> 
+                                    No oily sheen, discolouration or odour
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-[200px_1fr] border-b border-gray-300">
+                            <div className="bg-green-200 font-bold p-3 border-r border-gray-300">Monitoring frequency</div>
+                            <div className="p-0">
+                                <input type="text" value={formData.monitoringFrequency || ''} onChange={e => updateField('monitoringFrequency', e.target.value)} className="w-full h-full p-3 bg-white outline-none" placeholder="Enter frequency..." />
+                            </div>
+                        </div>
+
+                        <div className="bg-green-200 font-bold p-3 border-b border-gray-300">
+                            <div className="mb-1">Water quality required</div>
+                            <div className="font-normal text-sm">If criteria are not met - stop pumping and contact the permit authoriser immediately.</div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse min-w-[800px]">
+                                <thead>
+                                    <tr className="bg-gray-50 text-gray-800 text-[11px] font-bold">
+                                        <th className="p-2 border border-gray-300 bg-green-200 min-w-[80px]">Time</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-24">Mon Clarity/ pH</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-24">Tues Clarity/ pH</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-24">Wed Clarity/ pH</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-24">Thus Clarity/ pH</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-24">Fri Clarity/ pH</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-32">Staff member undertaking monitoring</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-32">Monitoring location</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-32">Comments</th>
+                                        <th className="p-2 border border-gray-300 bg-green-200 w-10"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(formData.monitoringLogs || []).map(log => (
+                                        <tr key={log.id} className="hover:bg-blue-50/50">
+                                            <td className="p-1 border border-gray-300"><input type="time" value={log.time} onChange={e => updateMonitoringLog(log.id, 'time', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.mon} onChange={e => updateMonitoringLog(log.id, 'mon', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.tue} onChange={e => updateMonitoringLog(log.id, 'tue', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.wed} onChange={e => updateMonitoringLog(log.id, 'wed', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.thu} onChange={e => updateMonitoringLog(log.id, 'thu', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.fri} onChange={e => updateMonitoringLog(log.id, 'fri', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.staffMember} onChange={e => updateMonitoringLog(log.id, 'staffMember', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.monitoringLocation} onChange={e => updateMonitoringLog(log.id, 'monitoringLocation', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300"><input type="text" value={log.comments} onChange={e => updateMonitoringLog(log.id, 'comments', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent"/></td>
+                                            <td className="p-1 border border-gray-300 text-center">
+                                                <button onClick={() => removeMonitoringLog(log.id)} className="text-red-500 hover:text-red-700 p-1"><Trash2 size={14}/></button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {(!formData.monitoringLogs || formData.monitoringLogs.length === 0) && (
+                                        <tr><td colSpan={10} className="p-8 text-center text-gray-400 font-bold border border-gray-300">No monitoring logs recorded yet.</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div className={activeTab === 'closeout' ? 'block animate-fade-in' : 'hidden'}>
+                    <ReadOnlyPermitHeader />
+                    <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-gray-800 mb-6">Permit Closeout</h3>
+                    
+                    <div className="bg-gray-50 border-2 border-gray-200 p-8 rounded-2xl relative">
+                        <div className="text-center bg-cyan-200 text-black p-2 font-bold mb-4">
+                            <div className="font-black text-lg">Permit closeout person</div>
+                            <div>in Charge of Work to complete and return closed out permits and monitoring records to the Authoriser</div>
+                        </div>
+                        <div className="text-center bg-cyan-200 text-black p-2 font-bold mb-8">
+                            As the Person in Charge of Work I confirm that pumping activities described in this permit have now been completed.
+                        </div>
+
+                        <div>
+                            <div className="mb-4">
+                                <label className="block text-xs font-black mb-2 text-gray-600 uppercase">Closeout Operator Name *</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" 
+                                    value={formData.closureReceiverName || ''} 
+                                    onChange={(e) => updateField('closureReceiverName', e.target.value)} 
+                                />
+                            </div>
+                            <div className="mb-8">
+                                <label className="block text-xs font-black mb-2 text-gray-600 uppercase">Closeout Date *</label>
+                                <input 
+                                    type="date" 
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" 
+                                    value={formData.closureDate ? formData.closureDate.split('T')[0] : ''} 
+                                    onChange={(e) => updateField('closureDate', new Date(e.target.value).toISOString())} 
+                                />
+                            </div>
+                            <SignaturePad label="Closeout Signature *" onSave={(sig) => updateField('closureSignature', sig)} initialValue={formData.closureSignature} />
+                        </div>
                     </div>
                 </div>
             </div>
