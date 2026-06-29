@@ -7,9 +7,10 @@ interface SignaturePadProps {
   onSave: (sig: Signature) => void;
   initialValue?: Signature;
   externalName?: string; // New prop to sync name from external inputs
+  readOnly?: boolean; // When true, locks the signature (no clearing, no re-signing)
 }
 
-const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue, externalName }) => {
+const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue, externalName, readOnly = false }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [mode, setMode] = useState<SignatureType>('draw');
@@ -57,7 +58,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
   };
 
   const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    if (mode !== 'draw' || hasSignature) return;
+    if (mode !== 'draw' || hasSignature || readOnly) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -75,7 +76,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
   };
 
   const draw = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDrawing || mode !== 'draw' || hasSignature) return;
+    if (!isDrawing || mode !== 'draw' || hasSignature || readOnly) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -136,7 +137,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
     <div className="border rounded-lg p-4 bg-white shadow-sm">
       <div className="flex justify-between items-center mb-2">
         <label className="block text-sm font-bold text-gray-700">{label}</label>
-        {!hasSignature && (
+        {!hasSignature && !readOnly && (
             <div className="flex space-x-2">
             <button
                 type="button"
@@ -168,7 +169,13 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
               ) : (
                   <img src={initialValue?.data || ''} alt="Signature" className="h-16 mx-auto mt-2" />
               )}
-              <button onClick={() => { setHasSignature(false); clear(); }} className="mt-2 text-xs text-red-500 font-bold underline no-print">Clear / Re-sign</button>
+              {!readOnly && (
+                <button onClick={() => { setHasSignature(false); clear(); }} className="mt-2 text-xs text-red-500 font-bold underline no-print">Clear / Re-sign</button>
+              )}
+          </div>
+      ) : readOnly ? (
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded text-center">
+              <p className="text-gray-400 text-sm font-semibold italic">Awaiting signature</p>
           </div>
       ) : (
           <>

@@ -4,8 +4,8 @@ import { db } from '../firebase';
 import { Loader2 } from 'lucide-react';
 import { getCurrentUserEmail } from '../services/cx';
 
-export const ModeToggle: React.FC = () => {
-    const [isLive, setIsLive] = useState<boolean | null>(null);
+export const AutoSyncToggle: React.FC = () => {
+    const [enableCxSync, setEnableCxSync] = useState<boolean | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     const currentUser = getCurrentUserEmail().toLowerCase();
@@ -17,13 +17,13 @@ export const ModeToggle: React.FC = () => {
                 const docRef = doc(db, 'settings', 'config');
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
-                    setIsLive(docSnap.data().acceptLiveTraffic !== false && docSnap.data().environment !== 'demo_mode');
+                    setEnableCxSync(docSnap.data().enableCxSync !== false); // default true
                 } else {
-                    setIsLive(true); // Default
+                    setEnableCxSync(true); // Default
                 }
             } catch (e) {
                 console.error("Error fetching config:", e);
-                setIsLive(true);
+                setEnableCxSync(true);
             } finally {
                 setIsLoading(false);
             }
@@ -33,20 +33,20 @@ export const ModeToggle: React.FC = () => {
 
     const handleToggle = async () => {
         if (!isMaster) return alert("Access Denied: Master Clearance Required.");
-        const newIsLive = !isLive;
+        const newValue = !enableCxSync;
         
-        const confirmMessage = newIsLive 
-            ? "Are you sure you want to activate LIVE MODE? (Accepts incoming Cx data)" 
-            : "Are you sure you want to switch to DEMO MODE? (Blocks incoming Cx data)";
+        const confirmMessage = newValue 
+            ? "Are you sure you want to ENABLE Auto-Sync from iTwoCX?" 
+            : "Are you sure you want to DISABLE Auto-Sync from iTwoCX? (Incoming webhooks will be ignored)";
             
         if (window.confirm(confirmMessage)) {
             setIsLoading(true);
             try {
-                await setDoc(doc(db, 'settings', 'config'), { acceptLiveTraffic: newIsLive, environment: newIsLive ? 'live' : 'demo_mode' }, { merge: true });
-                setIsLive(newIsLive);
+                await setDoc(doc(db, 'settings', 'config'), { enableCxSync: newValue }, { merge: true });
+                setEnableCxSync(newValue);
             } catch (e) {
                 console.error("Error updating config:", e);
-                alert("Failed to update system mode.");
+                alert("Failed to update auto-sync mode.");
             } finally {
                 setIsLoading(false);
             }
@@ -58,17 +58,17 @@ export const ModeToggle: React.FC = () => {
 
     return (
         <div style={{ padding: '20px', border: '2px solid #e5e7eb', borderRadius: '8px', maxWidth: '350px', backgroundColor: '#f9fafb' }}>
-            <h3 style={{ marginTop: 0, color: '#111827', fontWeight: 'bold' }}>System Data Mode</h3>
+            <h3 style={{ marginTop: 0, color: '#111827', fontWeight: 'bold' }}>Auto-Sync from iTwoCX</h3>
             <p style={{ color: '#4b5563', marginBottom: '15px', fontSize: '14px' }}>
-                Current State: <strong style={{ color: isLive ? '#16a34a' : '#ea580c' }}>
-                    {isLive ? 'LIVE MODE (Accepts incoming Cx data)' : 'DEMO MODE (Blocks incoming Cx data)'}
+                Current State: <strong style={{ color: enableCxSync ? '#16a34a' : '#ea580c' }}>
+                    {enableCxSync ? 'ENABLED' : 'DISABLED'}
                 </strong>
             </p>
             <button 
                 onClick={handleToggle}
                 disabled={isLoading}
                 style={{
-                    backgroundColor: isLive ? '#dc2626' : '#16a34a',
+                    backgroundColor: enableCxSync ? '#dc2626' : '#16a34a',
                     color: 'white',
                     padding: '12px 20px',
                     border: 'none',
@@ -80,7 +80,7 @@ export const ModeToggle: React.FC = () => {
                     letterSpacing: '0.5px'
                 }}
             >
-                SWITCH TO {isLive ? 'DEMO MODE' : 'LIVE MODE'}
+                {enableCxSync ? 'DISABLE AUTO-SYNC' : 'ENABLE AUTO-SYNC'}
             </button>
         </div>
     );

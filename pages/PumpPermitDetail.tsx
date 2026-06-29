@@ -6,6 +6,7 @@ import SignaturePad from '../components/SignaturePad';
 import { submitPermitToCX, issuePermitToCX, getUserRole } from '../services/cx';
 import { uploadImageToStorage, db } from '../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
 import ReactDOM from 'react-dom/client';
 import PumpPermitPDFLayout from '../components/PumpPermitPDFLayout';
 import html2canvas from 'html2canvas';
@@ -150,19 +151,18 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         }
 
         const rawNum = permit.itwocxNumber?.replace(/\D/g, "") || "";
-        const finalData = { ...permit, status: 'issued' as const };
+        const finalData = { ...permit, status: 'issued', isDraft: false, syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'issue', cxSyncError: null } as any;
         
         setIsSubmitting(true);
         try {
             const permitRef = doc(db, 'permits', finalData.id);
-            await setDoc(permitRef, { ...finalData, isDraft: false, lastUpdated: new Date().toISOString() }, { merge: true });
+            await setDoc(permitRef, { ...finalData, lastUpdated: new Date().toISOString() }, { merge: true });
 
-            await issuePermitToCX({ ...finalData, itwocxNumber: rawNum });
             savePermit(finalData);
             setPermit(finalData);
-            alert(`🎉 SUCCESS!\n\nPump Permit Issued and lodged to iTwoCX.`);
+            alert(`✅ Permit Saved Successfully\n\nPump Permit Issued and securely saved to Firebase.`);
         } catch (error: any) {
-            alert(`⚠️ Saved Locally & in Cloud, BUT failed to lodge to iTwoCX.\n\nError: ${error.message}`);
+            alert(`⚠️ Error saving permit to Firebase: ${error.message}`);
         } finally { setIsSubmitting(false); }
     };
 
@@ -231,11 +231,23 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                         heightLeft -= pdf.internal.pageSize.getHeight();
                     }
                     
-                    const pdfBlob = pdf.output('blob');
-                    const fileName = `PumpPermit_${permitData.itwocxNumber || permitData.permitNumber}_Closed.pdf`;
-                    const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
-                    
-                    await submitPermitToCX(permitData.itwocxNumber || "", pdfFile, "Pump Permit Closed");
+                    const rawNumber = String(permitData.itwocxNumber || permitData.permitNumber || "").replace(/\D/g, "");
+                    const pdfBase64 = pdf.output('datauristring').split(',')[1];
+
+                    let finalUpdatedPermit = { ...permitData, syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'closure', cxSyncError: null } as any;
+
+                    try {
+                        const storage = getStorage();
+                        const pdfRef = ref(storage, `pdf_backups/PF${rawNumber}_${new Date().getTime()}.pdf`);
+                        await uploadString(pdfRef, pdfBase64, 'base64', { contentType: 'application/pdf' });
+                        const downloadUrl = await getDownloadURL(pdfRef);
+                        finalUpdatedPermit = { ...finalUpdatedPermit, pdfBackupUrl: downloadUrl };
+                    } catch (storageError) { console.error("Backup PDF Error:", storageError); }
+
+                    const docRef = doc(db, 'permits', finalUpdatedPermit.id);
+                    await setDoc(docRef, { ...finalUpdatedPermit, lastUpdated: new Date().toISOString() }, { merge: true });
+                    savePermit(finalUpdatedPermit);
+                    setPermit(finalUpdatedPermit);
                     
                     root.unmount();
                     document.body.removeChild(pdfContainer);
@@ -268,14 +280,14 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         try {
             await handleSave(updatedPermit);
             
-            alert("Permit closed. Generating PDF and uploading to iTwoCX...");
+            alert("Permit closed. Generating PDF and securing to Firebase...");
             await generateAndUploadPDF(updatedPermit);
             
-            alert("✅ PDF successfully uploaded to iTwoCX!");
+            alert("✅ Permit Saved Successfully\n\nPermit closed and securely saved to Firebase.");
             onBack();
         } catch (error: any) {
             console.error(error);
-            alert(`⚠️ Saved locally, but failed to upload PDF to iTwoCX: ${error.message}`);
+            alert(`⚠️ Error saving permit to Firebase: ${error.message}`);
         } finally {
             setIsSaving(false);
         }
@@ -284,8 +296,9 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     if (loading) return <div className="flex justify-center items-center h-64"><Loader2 className="animate-spin text-blue-600" size={48} /></div>;
     if (!permit) return <div className="text-center p-12 text-red-600 font-bold">Permit not found.</div>;
 
-    const isClosed = permit.status === 'closed';
-    const isIssued = permit.status === 'issued';
+    const currentStatus = permit?.status?.toUpperCase() || '';
+    const isIssued = currentStatus === 'ISSUED' || currentStatus === 'ACTIVE';
+    const isClosed = currentStatus === 'CLOSED';
     const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none shadow-sm disabled:bg-gray-100";
 
     return (
@@ -339,48 +352,50 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                 
                 {activeTab === 'details' && (
                     <div className="animate-fade-in">
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                         <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">General Details</h3>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><input type="text" value={permit.itwocxNumber} onChange={(e) => updateField('itwocxNumber', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><input type="text" value={permit.projectName} onChange={(e) => updateField('projectName', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><input type="text" value={permit.itwocxNumber} onChange={(e) => updateField('itwocxNumber', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><input type="text" value={permit.projectName} onChange={(e) => updateField('projectName', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                             
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><input type="text" value={permit.requestingCompany} onChange={(e) => updateField('requestingCompany', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Location to be dewatered *</label><input type="text" value={permit.dewateringLocation} onChange={(e) => { updateField('dewateringLocation', e.target.value); updateField('location', e.target.value); }} disabled={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><input type="text" value={permit.requestingCompany} onChange={(e) => updateField('requestingCompany', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Location to be dewatered *</label><input type="text" value={permit.dewateringLocation} onChange={(e) => { updateField('dewateringLocation', e.target.value); updateField('location', e.target.value); }} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
 
                             <div className="md:col-span-2">
                                 <label className="block text-xs font-black mb-2 text-gray-600 uppercase">Description of area *</label>
-                                <textarea value={permit.areaDescription} onChange={(e) => updateField('areaDescription', e.target.value)} disabled={isClosed || isIssued} className={`${inputClass} h-24 resize-none`} />
+                                <textarea value={permit.areaDescription} onChange={(e) => updateField('areaDescription', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={`${inputClass} h-24 resize-none`} />
                             </div>
                         </div>
 
                         <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Person in Charge</h4>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Name</label><input type="text" value={permit.personInChargeName} onChange={(e) => updateField('personInChargeName', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Contact Number</label><input type="text" value={permit.personInChargeContact} onChange={(e) => updateField('personInChargeContact', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Position</label><input type="text" value={permit.personInChargePosition} onChange={(e) => updateField('personInChargePosition', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Name</label><input type="text" value={permit.personInChargeName} onChange={(e) => updateField('personInChargeName', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Contact Number</label><input type="text" value={permit.personInChargeContact} onChange={(e) => updateField('personInChargeContact', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Position</label><input type="text" value={permit.personInChargePosition} onChange={(e) => updateField('personInChargePosition', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                         </div>
 
                         <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Pumping Details</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Impurities other than sediment</label><input type="text" value={permit.impurities} onChange={(e) => updateField('impurities', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Final Discharge Point</label><input type="text" value={permit.dischargePoint} onChange={(e) => updateField('dischargePoint', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Size of Pump / Rate / Volume</label><input type="text" value={permit.pumpSizeRateVolume} onChange={(e) => updateField('pumpSizeRateVolume', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pumping hours of operation</label><input type="text" value={permit.pumpingHours} onChange={(e) => updateField('pumpingHours', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Start Date</label><input type="date" value={permit.startDate} onChange={(e) => updateField('startDate', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Expiry Date</label><input type="date" value={permit.expiryDate} onChange={(e) => updateField('expiryDate', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Impurities other than sediment</label><input type="text" value={permit.impurities} onChange={(e) => updateField('impurities', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Final Discharge Point</label><input type="text" value={permit.dischargePoint} onChange={(e) => updateField('dischargePoint', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Size of Pump / Rate / Volume</label><input type="text" value={permit.pumpSizeRateVolume} onChange={(e) => updateField('pumpSizeRateVolume', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pumping hours of operation</label><input type="text" value={permit.pumpingHours} onChange={(e) => updateField('pumpingHours', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Start Date</label><input type="date" value={permit.startDate} onChange={(e) => updateField('startDate', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Expiry Date</label><input type="date" value={permit.expiryDate} onChange={(e) => updateField('expiryDate', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                         </div>
 
                         <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Controls and Monitoring</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Inlet Controls</label><input type="text" value={permit.pumpInletControls} onChange={(e) => updateField('pumpInletControls', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Outlet Controls</label><input type="text" value={permit.pumpOutletControls} onChange={(e) => updateField('pumpOutletControls', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Sediment control intermediate</label><input type="text" value={permit.sedimentControlPoint} onChange={(e) => updateField('sedimentControlPoint', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Discharge criteria</label><input type="text" value={permit.dischargeCriteria} onChange={(e) => updateField('dischargeCriteria', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Location</label><input type="text" value={permit.monitoringLocation} onChange={(e) => updateField('monitoringLocation', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Frequency</label><input type="text" value={permit.monitoringFrequency} onChange={(e) => updateField('monitoringFrequency', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Other Monitoring Requirements</label><input type="text" value={permit.otherMonitoringRequirements} onChange={(e) => updateField('otherMonitoringRequirements', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
-                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Person responsible for monitoring</label><input type="text" value={permit.personResponsibleForMonitoring} onChange={(e) => updateField('personResponsibleForMonitoring', e.target.value)} disabled={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Inlet Controls</label><input type="text" value={permit.pumpInletControls} onChange={(e) => updateField('pumpInletControls', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Outlet Controls</label><input type="text" value={permit.pumpOutletControls} onChange={(e) => updateField('pumpOutletControls', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Sediment control intermediate</label><input type="text" value={permit.sedimentControlPoint} onChange={(e) => updateField('sedimentControlPoint', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Discharge criteria</label><input type="text" value={permit.dischargeCriteria} onChange={(e) => updateField('dischargeCriteria', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Location</label><input type="text" value={permit.monitoringLocation} onChange={(e) => updateField('monitoringLocation', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Frequency</label><input type="text" value={permit.monitoringFrequency} onChange={(e) => updateField('monitoringFrequency', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Other Monitoring Requirements</label><input type="text" value={permit.otherMonitoringRequirements} onChange={(e) => updateField('otherMonitoringRequirements', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                            <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Person responsible for monitoring</label><input type="text" value={permit.personResponsibleForMonitoring} onChange={(e) => updateField('personResponsibleForMonitoring', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                         </div>
 
                         <div className="mt-8 border border-gray-300 p-6 rounded-2xl bg-gray-50 shadow-sm">
@@ -388,14 +403,18 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                             {permit.siteEngineerSignature && (isIssued || isClosed) ? (
                                 <div className="text-center"><img src={permit.siteEngineerSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.siteEngineerSignature.name}</p></div>
                             ) : (
-                                <SignaturePad label="Sign here to complete Details" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} />
+                                <SignaturePad label="Sign here to complete Details" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} readOnly={isIssued || isClosed} />
                             )}
+                        </div>
+                        </fieldset>
                         </div>
                     </div>
                 )}
 
                 {activeTab === 'receiver' && (
                     <div className="animate-fade-in">
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                         <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Permit Receiver Section</h3>
                         
                         <div className="border border-blue-200 p-6 rounded-2xl bg-blue-50 shadow-sm relative">
@@ -406,8 +425,10 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                             {permit.receiverSignature && (isIssued || isClosed) ? (
                                 <div className="text-center"><img src={permit.receiverSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase text-blue-900">{permit.receiverSignature.name}</p></div>
                             ) : (
-                                <SignaturePad label="Sign here to receive permit" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} />
+                                <SignaturePad label="Sign here to receive permit" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} readOnly={isIssued || isClosed} />
                             )}
+                        </div>
+                        </fieldset>
                         </div>
                     </div>
                 )}
@@ -443,6 +464,8 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
                 {activeTab === 'issuer' && (
                     <div className="animate-fade-in">
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                         <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Issuer Authorization</h3>
                         
                         <div className="border-2 border-green-500 p-8 rounded-2xl bg-green-50 shadow-md relative overflow-hidden text-center">
@@ -457,7 +480,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                 {permit.issuerSignature && (isIssued || isClosed) ? (
                                     <div className="text-center"><img src={permit.issuerSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.issuerSignature.name}</p></div>
                                 ) : (
-                                    <SignaturePad label="Issuer Name to Execute Permit *" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} />
+                                    <SignaturePad label="Issuer Name to Execute Permit *" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} readOnly={isIssued || isClosed} />
                                 )}
                             </div>
 
@@ -473,6 +496,8 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                     <CheckCircle size={20}/> PERMIT ISSUED TO SITE
                                 </div>
                             )}
+                        </div>
+                        </fieldset>
                         </div>
                     </div>
                 )}

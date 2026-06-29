@@ -1,8 +1,9 @@
+// ARCHIVO: src/pages/PermitDetail.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, Trash2, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff, Wifi } from 'lucide-react';
 import { Permit, Signature, HandoverLog, DailySignOff, PermitPhoto, CeaseWorksRecord, CrewMember, INITIAL_PART_A, INITIAL_PART_B, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST } from '../types';
 import { getPermitById, savePermit } from '../services/storage';
-import { submitPermitToCX, issuePermitToCX, getUserRole } from '../services/cx'; 
+import { getUserRole } from '../services/cx'; 
 import SignaturePad from '../components/SignaturePad';
 import PermitPDFLayout, { EmergencyProtocolContent } from '../components/PermitPDFLayout';
 import html2canvas from 'html2canvas';
@@ -47,7 +48,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
     const [isUploadingApproverPhoto, setIsUploadingApproverPhoto] = useState(false); 
     
-    // 🚀 DETECTOR DE SEÑAL EN VIVO
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
@@ -94,8 +94,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     if (!permit) return <div className="p-12 text-center text-red-600 font-black">Permit Not Found.</div>;
 
-    const isIssued = permit.status === 'issued'; 
-    const isClosed = permit.status === 'closed';
+    const pType = permit.permitType?.toUpperCase();
+    if (pType && pType !== 'BG' && pType !== 'EXCAVATION') {
+        return <div className="p-12 text-center text-red-600 font-black">Template for this Permit Type is not yet implemented.</div>;
+    }
+
+    // 🚀 LÓGICA DE ESTADO CORREGIDA (FIX PARA EL GLITCH)
+    const isClosed = permit?.status?.toLowerCase() === 'closed';
+    // Si isDraft es true, isIssued SIEMPRE será falso.
+    const isIssued = permit?.isDraft === false && !isClosed; 
     const isSuspended = permit.ceaseWorksRecord?.actionTaken === 'suspended';
     const isHydro = permit.excavationType === 'hydro' || permit.excavationType === 'hand';
     const hasApproverSigned = !!permit.approverSignature?.data;
@@ -119,7 +126,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const allHandoverChecksPassed = handoverItems.every(item => handoverChecks[item.id]);
     const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100 disabled:text-gray-500 shadow-sm";
 
-    // 🚀 SYNC DE TEXTO EN EL FONDO (Seguro y ligero)
     const syncToFirebase = async (updatedPermit: Permit) => {
         savePermit(updatedPermit); 
         setPermit(updatedPermit);
@@ -140,8 +146,21 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         syncToFirebase({ ...permit, [listName]: updatedList } as Permit);
     };
 
-    // 🚀 EMISIÓN: PERMITIDA OFFLINE
     const handleIssuePermit = async () => {
+        // 🚀 CANDADO DE EMISIÓN: VALIDA LOS RADIO BUTTONS
+        const missingIssuerChecks = [
+            'knownServicesScanned',
+            'servicesMarked',
+            'potholingMarkers',
+            'transpowerDesignation',
+            'watercareWorksOver'
+        ].filter(key => !permit[key as keyof Permit]);
+
+        if (missingIssuerChecks.length > 0) {
+            alert("🛑 CANNOT ISSUE:\n\nAll 5 Issuer Verification Checks (radio buttons) must be completed before issuing to the field.");
+            return;
+        }
+
         if (!permit.siteEngineerSignature || !permit.receiverSignature || !permit.issuerSignature) {
             alert("🛑 CANNOT ISSUE:\n\nEngineer, Receiver, and Issuer signatures are required before issuing to the field."); return;
         }
@@ -152,35 +171,17 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
         setIsSubmitting(true);
         try {
-            const updated = { ...permit, isDraft: false, status: 'issued' } as Permit;
+            const updated = { ...permit, isDraft: false, status: 'issued', syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'issue', cxSyncError: null } as any;
             await syncToFirebase(updated);
             
-            if (!isOnline) throw new Error("NETWORK_OFFLINE");
-            
-            try {
-                await issuePermitToCX(updated);
-                await syncToFirebase({ ...updated, syncStatus: 'synced', cxSyncPending: null, cxSyncError: null } as any);
-                alert("✅ PERMIT ISSUED TO SITE!\n\nThe status is now 'ISSUED'. Tabs 1, 2, and 3 are locked.");
-            } catch (cxError: any) {
-                throw cxError; 
-            }
-            
+            alert("✅ Permit Saved and sync in the background\n\nTabs 1, 2, and 3 are locked.");
         } catch (error: any) {
-            // 🐛 SOLUCIÓN: Agregada la etiqueta syncStatus: 'pending'
-            const updatedPending = { ...permit, isDraft: false, status: 'issued', syncStatus: 'pending', cxSyncPending: 'issue', cxSyncError: error.message } as any;
-            await syncToFirebase(updatedPending);
-            
-            if (error.message === "NETWORK_OFFLINE") {
-                alert("⚠️ OFFLINE MODE: Permit Issued to Site!\n\nThe permit is now active for the crew. It has been placed in the Sync Queue and will upload to iTwoCX automatically when internet returns.");
-            } else {
-                alert(`⚠️ SYNC ALERT: Permit Issued to Site!\n\nPermit is active, but CX rejected the sync. Added to Queue.\nError: ${error.message}`);
-            }
+            alert(`⚠️ Error saving permit to Firebase: ${error.message}`);
         } finally {
             setIsSubmitting(false); 
         }
     };
 
-    // 🚀 FOTOS: REQUIEREN INTERNET 
     const handleApproverPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (isClosed || !e.target.files || e.target.files.length === 0 || !permit) return;
         if (!isOnline) { alert("🛑 NO INTERNET\n\nYou must be connected to the internet to upload photos securely to the vault."); e.target.value = ''; return; }
@@ -225,7 +226,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setHandoverReceiver(''); setHandoverSignature(null); setHandoverChecks({});
     };
 
-    // 🚀 CIERRE: REQUIERE INTERNET ESTRICTO 
+    // 🚀 CIERRE LOBOTOMIZADO: GUARDA DE INMEDIATO EN FIREBASE PARA ACTIVAR EL BACKEND
     const handleAutomatedCloseAndLodge = async () => {
         if (!isOnline) {
             alert("🛑 INTERNET CONNECTION REQUIRED\n\nClosing a permit generates a heavy 12-page PDF file with all signatures and photos. You must have an active internet connection to secure this document in the cloud. Please find a 4G/WiFi signal before closing."); 
@@ -234,6 +235,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         if (isExecutionBlocked) { alert("🛑 ERROR: The permit cannot be closed because Part B has not been approved by the Permit Approver."); return; }
         
         let errors = [];
+        if (permit.ceaseWorksRecord) {
+            errors.push("A Cease Works protocol has been triggered on this permit. Only an authorized Issuer can execute a safety closure.");
+        }
         if (!preClosureCheck1 && !preClosureCheck3) errors.push("Closure: Select 'Safe' or 'Outstanding'");
         if (preClosureCheck3 && !outstandingWorks.trim()) errors.push("Closure: Detail outstanding works");
         if (!isReceiver) errors.push("You do not have 'Receiver' permissions to close this permit.");
@@ -249,11 +253,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             ...permit, status: 'closed', closureSignature: currentReceiverSignature, closureReceiverName: currentReceiverName, 
             closureDate: new Date().toISOString(), closureChecklistExcavationSafe: preClosureCheck1, closureChecklistAsBuiltReturned: preClosureCheck2, 
             closureChecklistOutstandingWorks: preClosureCheck3, closureOutstandingWorksDetails: outstandingWorks, otherNotes: finalNotes
-        };
+        } as any;
         
-        await syncToFirebase(updatedPermit);
         setOtherNotes(finalNotes);
         
+        // 1. Generate PDF and upload to Firebase Storage BEFORE finalizing the sync
         try {
             if (pdfExportRef.current) {
                 await new Promise(resolve => setTimeout(resolve, 800)); 
@@ -273,21 +277,30 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     await uploadString(pdfRef, pdfBase64, 'base64', { contentType: 'application/pdf' });
                     const downloadUrl = await getDownloadURL(pdfRef);
                     updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl } as any;
-                    await syncToFirebase(updatedPermit);
                 } catch (storageError) { console.error("Backup PDF Error:", storageError); }
-                
-                try {
-                    await submitPermitToCX({ ...updatedPermit, itwocxNumber: rawNumber, issuerSignature: { data: `data:application/pdf;base64,${pdfBase64}` } }, `EB_Permit_PF${rawNumber}_${new Date().getTime()}.pdf`);
-                    await syncToFirebase({ ...updatedPermit, syncStatus: 'synced', cxSyncPending: null, cxSyncError: null } as any);
-                    alert(`🎉 SUCCESS!\nPermit successfully closed and saved in iTwoCX.`);
-                } catch (cxError: any) { throw cxError; }
             }
         } catch (error: any) { 
-            // 🐛 SOLUCIÓN: Agregada la etiqueta syncStatus: 'pending'
-            const updatedPending = { ...updatedPermit, syncStatus: 'pending', cxSyncPending: 'closure', cxSyncError: error.message } as any;
-            await syncToFirebase(updatedPending);
-            alert(`⚠️ SYNC ALERT: Permit Closed locally, but CX Sync Failed.\nAdded to Queue.\nError: ${error.message}`);
-        } finally { setIsSubmitting(false); }
+            console.error(`Error generating PDF: ${error.message}`);
+        }
+
+        // 2. Apply Filtering Rule for 'Breaking Ground' family and finalize sync
+        const pTypeCheck = String(updatedPermit.permitType || '').toUpperCase();
+        const isBreakingGround = ['BG', 'BGP', 'BE', 'EXCAVATION'].includes(pTypeCheck);
+
+        if (isBreakingGround) {
+            updatedPermit = { 
+                ...updatedPermit, 
+                syncStatus: 'pending', 
+                sync_status: 'pending', 
+                cxSyncPending: 'closure', 
+                cxSyncError: null 
+            } as any;
+        }
+
+        await syncToFirebase(updatedPermit);
+
+        setIsSubmitting(false); 
+        alert(`✅ Permit Saved and sync in the background\n\nThe permit has been closed and securely saved to Firebase.`);
     };
 
     const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -305,11 +318,14 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         } catch (err) { alert("Error uploading photo to cloud."); } finally { setIsUploadingPhoto(false); e.target.value = ''; }
     };
 
-    // 🚀 EMERGENCIA: REQUIERE INTERNET ESTRICTO
     const handleCeaseWorksSave = async (sig: Signature) => {
         if (isClosed || !permit || !ceaseItem || !ceaseAction || !ceaseIssuerName) { alert("Fill all fields."); return; }
         if (ceaseAction === 'cancelled' && !isOnline) {
             alert("🛑 INTERNET CONNECTION REQUIRED\n\nExecuting this protocol generates a heavy PDF report. You must be connected to the internet to secure this document in the cloud. Please find signal."); return;
+        }
+        if (ceaseAction === 'cancelled' && !isIssuerRole) {
+            alert("🛑 ACTION DENIED:\n\nA Cease Works protocol has been triggered. ONLY an authorized 'Issuer' has the authority to trigger the safety closure.");
+            return;
         }
 
         const isConfirmed = confirm("🚨 EXECUTING CEASE WORKS PROTOCOL\n\nIf you proceed, this permit will be permanently locked and synchronized with iTwoCX as CLOSED. The reasons for the stoppage will be permanently attached. Do you wish to proceed?");
@@ -318,7 +334,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setIsSubmitting(true);
         
         const newRecord: CeaseWorksRecord = { id: crypto.randomUUID(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
-        let updatedPermit = { ...permit, ceaseWorksRecord: newRecord };
+        let updatedPermit: any = { ...permit, ceaseWorksRecord: newRecord };
 
         if (ceaseAction === 'cancelled') { 
             const ceaseReasons: Record<string, string> = {
@@ -339,12 +355,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             updatedPermit.closureOutstandingWorksDetails = `🚨 PERMIT CLOSED DUE TO CEASE WORKS PROTOCOL.\nReason: ${reasonText}`;
             
             updatedPermit.otherNotes = (updatedPermit.otherNotes || '') + `\n\n🚨 EMERGENCY CLOSED VIA CEASE WORKS PROTOCOL by ${ceaseIssuerName}. Reason: ${reasonText}`;
-        }
-        
-        try {
-            await syncToFirebase(updatedPermit as Permit);
-
-            if (ceaseAction === 'cancelled') {
+            
+            // 1. Generate PDF and upload to Firebase Storage BEFORE finalizing the sync
+            try {
                 if (pdfExportRef.current) {
                     await new Promise(resolve => setTimeout(resolve, 800)); 
                     const pages = pdfExportRef.current.querySelectorAll('.pdf-page');
@@ -363,29 +376,35 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         await uploadString(pdfRef, pdfBase64, 'base64', { contentType: 'application/pdf' });
                         const downloadUrl = await getDownloadURL(pdfRef);
                         updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl } as any;
-                        await syncToFirebase(updatedPermit as Permit);
-                    } catch (storageError) { console.error("Backup PDF Error:", storageError); }
-                    
-                    try {
-                        await submitPermitToCX({ ...updatedPermit, itwocxNumber: rawNumber, issuerSignature: { data: `data:application/pdf;base64,${pdfBase64}` } }, `EB_Permit_PF${rawNumber}_EMERGENCY_CLOSED_${new Date().getTime()}.pdf`);
-                        await syncToFirebase({ ...updatedPermit, syncStatus: 'synced', cxSyncPending: null, cxSyncError: null } as any);
-                        alert("🚨 PROTOCOL COMPLETE: Permit gracefully Closed and Synchronized with iTwoCX.");
-                    } catch (cxError: any) { throw cxError; }
+                    } catch (storageError: any) { 
+                        console.error("Backup PDF Error:", storageError); 
+                    }
                 }
-            } else {
-                alert("Cease Works record updated (Suspended).");
-                setCeaseItem(''); setCeaseAction(''); setCeaseIssuerName(''); 
+            } catch (error: any) {
+                console.error("Protocol error", error);
             }
-        } catch (error: any) {
-            if (ceaseAction === 'cancelled') {
-                // 🐛 SOLUCIÓN: Agregada la etiqueta syncStatus: 'pending'
-                const updatedPending = { ...updatedPermit, syncStatus: 'pending', cxSyncPending: 'closure', cxSyncError: error.message } as any;
-                await syncToFirebase(updatedPending);
-                alert(`⚠️ PROTOCOL SAVED LOCALLY. CX Sync Failed: ${error.message}`); 
-            } else {
-                alert(`⚠️ PROTOCOL FAILED:\n${error.message}`); 
+
+            // 2. Apply Filtering Rule for 'Breaking Ground' family and finalize sync
+            const pTypeCheck = String(updatedPermit.permitType || '').toUpperCase();
+            const isBreakingGround = ['BG', 'BGP', 'BE', 'EXCAVATION'].includes(pTypeCheck);
+
+            if (isBreakingGround) {
+                updatedPermit.syncStatus = 'pending';
+                updatedPermit.sync_status = 'pending';
+                updatedPermit.cxSyncPending = 'closure';
+                updatedPermit.cxSyncError = null;
             }
-        } finally { setIsSubmitting(false); }
+        }
+        
+        await syncToFirebase(updatedPermit as Permit);
+
+        setIsSubmitting(false); 
+        if (ceaseAction === 'cancelled') {
+            alert("✅ Permit Saved and sync in the background\n\nEmergency Protocol complete.");
+        } else {
+            alert("Cease Works record updated (Suspended).");
+            setCeaseItem(''); setCeaseAction(''); setCeaseIssuerName(''); 
+        }
     };
 
     return (
@@ -414,7 +433,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                 <div className="bg-white rounded-t-2xl border border-gray-200 p-6 md:p-8 flex justify-between shadow-sm items-center relative">
                     <div>
-                        <h1 className="text-3xl md:text-4xl font-black text-gray-900 uppercase mb-2">PF#{String(permit.itwocxNumber || permit.permitNumber).replace(/\D/g, "")}</h1>
+                        <h1 className="text-3xl md:text-4xl font-black text-gray-900 uppercase mb-2">{permit.itwocxNumber || permit.permitNumber}</h1>
                         <div className="flex flex-col md:flex-row md:items-center text-xs text-gray-500 font-bold uppercase tracking-widest gap-2 md:gap-4"><span className="bg-gray-100 px-2 py-1 rounded text-gray-900 w-fit">{permit.location || 'No Location'}</span><span>Active Receiver: <span className="text-blue-700">{currentReceiverName}</span></span></div>
                     </div>
                     <div className={`px-6 py-3 rounded-xl text-sm font-black uppercase text-white h-fit shadow-md ${permit.status === 'closed' ? 'bg-red-600' : (permit.isDraft ? 'bg-orange-500 animate-pulse' : (isExecutionBlocked ? 'bg-amber-500' : 'bg-green-600'))}`}>
@@ -453,6 +472,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                 <div className="bg-white shadow-xl border p-4 md:p-8 min-h-[600px] relative">
                     
                     <div className={activeTab === 'engineer' ? 'block animate-fade-in' : 'hidden'}>
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Engineer (Part A)</h3>
                             <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">Ref: PDF Pg 4/12</span>
@@ -460,9 +481,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         {isIssued && <div className="bg-gray-100 text-gray-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-center gap-2"><Lock size={16}/> This planning section is locked because the permit has been issued.</div>}
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
-                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location</p><input type="text" className={inputClass} value={permit.location} onChange={e => updateField('location', e.target.value)} disabled={isIssued || isClosed} /></div>
+                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location</p><input type="text" className={inputClass} value={permit.location} onChange={e => updateField('location', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} /></div>
                             <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Excavation Type</p><select className={inputClass} value={permit.excavationType} onChange={e => updateField('excavationType', e.target.value)} disabled={isIssued || isClosed}><option value="mechanical">Mechanical Excavation</option><option value="hydro">Hydro Excavation</option><option value="hand">Hand Digging</option></select></div>
-                            <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works</p><textarea className={`${inputClass} h-20`} value={permit.scopeOfWorks} onChange={e => updateField('scopeOfWorks', e.target.value)} disabled={isIssued || isClosed}></textarea></div>
+                            <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works</p><textarea className={`${inputClass} h-20`} value={permit.scopeOfWorks} onChange={e => updateField('scopeOfWorks', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed}></textarea></div>
                         </div>
 
                         <div className="space-y-4 mb-10 border-b border-gray-100 pb-10">
@@ -471,7 +492,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     <div className="flex-1"><span className="font-black text-blue-600 mr-2">{String(item.id).replace(/[a-z]/g, '')}.</span><span className="text-sm font-bold text-gray-800 leading-relaxed">{item.question}</span></div>
                                     <div className="flex flex-col sm:flex-row gap-2 w-full md:w-80 shrink-0">
                                         <select className={inputClass + " sm:w-24"} value={item.answer || ''} onChange={(e) => updateChecklist('partAChecklist', item.id, 'answer', e.target.value)} disabled={isIssued || isClosed}><option value="">- PEND -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></select>
-                                        <input type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onChange={(e) => updateChecklist('partAChecklist', item.id, 'comment', e.target.value)} disabled={isIssued || isClosed} />
+                                        <input type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onChange={(e) => updateChecklist('partAChecklist', item.id, 'comment', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} />
                                     </div>
                                 </div>
                             ))}
@@ -483,7 +504,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 {permit.siteEngineerSignature && isIssued ? (
                                     <div className="text-center"><img src={permit.siteEngineerSignature.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.siteEngineerSignature.name}</p></div>
                                 ) : (
-                                    <SignaturePad label="Sign here" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} />
+                                    <SignaturePad label="Sign here" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} readOnly={isIssued || isClosed} />
                                 )}
                             </div>
                             
@@ -492,13 +513,17 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 {permit.receiverSignature && isIssued ? (
                                     <div className="text-center"><img src={permit.receiverSignature.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase text-blue-900">{permit.receiverSignature.name}</p></div>
                                 ) : (
-                                    <SignaturePad label="Sign here" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} />
+                                    <SignaturePad label="Sign here" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} readOnly={isIssued || isClosed} />
                                 )}
                             </div>
+                        </div>
+                        </fieldset>
                         </div>
                     </div>
 
                     <div className={activeTab === 'receiver_checklist' ? 'block animate-fade-in' : 'hidden'}>
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Receiver Checklist</h3>
                             <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">Ref: PDF Pg 6/12</span>
@@ -519,15 +544,19 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                         <div className="flex-1"><span className="font-black text-blue-600 mr-2">{item.id}.</span><span className="text-sm font-bold text-gray-800">{item.question}</span></div>
                                         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-80 shrink-0">
                                             <select className={inputClass + " sm:w-24"} value={item.answer || ''} onChange={(e) => updateChecklist('receiverChecklist', item.id, 'answer', e.target.value)} disabled={isIssued || isClosed}><option value="">- PEND -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></select>
-                                            <input type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onChange={(e) => updateChecklist('receiverChecklist', item.id, 'comment', e.target.value)} disabled={isIssued || isClosed} />
+                                            <input type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onChange={(e) => updateChecklist('receiverChecklist', item.id, 'comment', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} />
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         )}
+                        </fieldset>
+                        </div>
                     </div>
 
                     <div className={activeTab === 'issuer' ? 'block animate-fade-in' : 'hidden'}>
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                             <h3 className="font-black text-xl text-blue-900 uppercase">Issuer Final Checks</h3>
                             <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">Ref: PDF Pg 3/12</span>
@@ -547,7 +576,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     <div className="flex space-x-3 w-full sm:w-1/3 sm:justify-end">
                                         {(['yes', 'no', 'n/a'] as const).map(opt => (
                                             <label key={opt} className="flex items-center space-x-1 cursor-pointer">
-                                                <input type="radio" checked={permit[q.key as keyof Permit] === opt} onChange={() => updateField(q.key as keyof Permit, opt)} disabled={isIssued || isClosed} className="h-5 w-5 text-blue-600" />
+                                                <input type="radio" checked={permit[q.key as keyof Permit] === opt} onChange={() => updateField(q.key as keyof Permit, opt)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} className="h-5 w-5 text-blue-600" />
                                                 <span className="uppercase text-xs font-black text-gray-600">{opt}</span>
                                             </label>
                                         ))}
@@ -566,13 +595,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 </div>
                             ) : (
                                 <div>
-                                    <SignaturePad label="Issuer Signature" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} />
+                                    <SignaturePad label="Issuer Signature" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} readOnly={isIssued || isClosed} />
                                     <button onClick={handleIssuePermit} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
                                         {isSubmitting ? <Loader2 size={28} className="animate-spin" /> : <FileSignature size={28} />}
                                         {isSubmitting ? 'ISSUING...' : 'ISSUE PERMIT (LOCK PLANNING & DRAFT)'}
                                     </button>
                                 </div>
                             )}
+                        </div>
+                        </fieldset>
                         </div>
                     </div>
 
@@ -743,7 +774,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                             <Wifi size={20} /> You are offline. Internet connection is required to generate the Emergency Protocol PDF.
                                         </div>
                                     )}
-
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                                         <div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Action Required</label><select className={inputClass} value={ceaseAction} onChange={e => setCeaseAction(e.target.value as any)}><option value="">- Select Action -</option><option value="cancelled">Cancel / Revoke Permit immediately</option></select></div>
                                         <div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Issuer Name</label><input type="text" className={inputClass} value={ceaseIssuerName} onChange={e => setCeaseIssuerName(e.target.value)} placeholder="Authorizing Issuer..." /></div>
@@ -786,7 +816,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                 <Wifi size={16} className="shrink-0"/> INTERNET REQUIRED: You cannot close the permit offline because the final 12-page PDF must be uploaded directly to the cloud.
                                             </div>
                                         )}
-
                                         <button onClick={handleAutomatedCloseAndLodge} disabled={isSubmitting || !isOnline} className={`w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting || !isOnline ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed' : 'bg-red-600 text-white shadow-xl hover:bg-red-700 hover:scale-[1.02] active:scale-[0.98]'}`}>
                                             {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CloudUpload size={28} />}
                                             {isSubmitting ? 'Generating PDF & Syncing...' : 'Close Permit & Finalize'}
@@ -814,4 +843,5 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         </>
     );
 };
+
 export default PermitDetail;

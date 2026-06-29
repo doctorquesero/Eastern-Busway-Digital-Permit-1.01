@@ -197,15 +197,22 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
         savePermit(finalData);
         setIsSubmitting(true);
 
+        const toast = { success: (msg: string) => alert(`✅ ${msg}`) };
         try {
             const permitRef = doc(db, 'permits', finalData.id);
-            await setDoc(permitRef, { ...finalData, isDraft: false, lastUpdated: new Date().toISOString() }, { merge: true });
+            await setDoc(permitRef, { 
+                ...finalData, 
+                isDraft: false, 
+                sync_status: 'pending',
+                syncStatus: 'pending',
+                cxSyncPending: 'issue',
+                lastUpdated: new Date().toISOString() 
+            }, { merge: true });
 
-            await issuePermitToCX({ ...finalData, itwocxNumber: rawNum });
-            alert(`🎉 SUCCESS!\n\nPump Permit Issued and lodged to iTwoCX.`);
+            toast.success('Permit Saved Locally');
             onComplete(); 
         } catch (error: any) {
-            alert(`⚠️ Saved Locally & in Cloud, BUT failed to lodge to iTwoCX.\n\nError: ${error.message}`);
+            alert(`⚠️ Error saving permit to database: ${error.message}`);
             onComplete();
         } finally { setIsSubmitting(false); }
     };

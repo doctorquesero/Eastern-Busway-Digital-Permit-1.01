@@ -1,40 +1,66 @@
+// ARCHIVO: functions/src/index.ts
 import * as functions from "firebase-functions";
-import { onDocumentUpdated } from "firebase-functions/v2/firestore";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+require("dotenv").config();
 const corsHandler = require("cors")({ origin: true });
 const nodemailer = require('nodemailer');
 
-// 🚀 INICIALIZAR ADMIN PARA LEER LA BASE DE DATOS DE SETTINGS
 const admin = require('firebase-admin');
 if (!admin.apps.length) {
     admin.initializeApp();
 }
 const db = admin.firestore();
 
-// 🚀 BASE URL CENTRALIZADA SEGÚN DOCUMENTACIÓN OFICIAL (VERSIÓN 25.12)
 const CX_API_BASE = "https://au.itwocx.com/api/25.12/Api";
 
-// 🛡️ HEADERS BÁSICOS ESTRICTOS (Sin Origin/Referer para evitar WebKnight)
+// ============================================================================
+// 📊 TABLA DE CONFIGURACIÓN MODULAR DE PERMISOS (Diccionario CX)
+// ============================================================================
+interface PermitTypeSettings {
+    allowed: boolean;
+    pdfPrefix: string;
+}
+
+const PERMIT_CONFIG: Record<string, PermitTypeSettings> = {
+    // Breaking Ground & Excavations
+    "BG": { allowed: true, pdfPrefix: "BG" },           // Breaking Ground Permit
+    "BGP": { allowed: true, pdfPrefix: "BGP" },         // Breaking Ground Permit PART B
+    "BE": { allowed: true, pdfPrefix: "BE" },           // Breaking Ground Service Disconnection
+    "EXCAVATION": { allowed: true, pdfPrefix: "BG" },   // Generic fallback for our app
+    "HYDRO": { allowed: true, pdfPrefix: "HYDRO" },     // Hydro Excavation
+    "TES": { allowed: true, pdfPrefix: "TES" },         // Trench Excavation Safe Entry
+    
+    // High Risk & Specialized
+    "CS": { allowed: true, pdfPrefix: "CS" },           // Confined Space Entry
+    "HO": { allowed: true, pdfPrefix: "HO" },           // Hot Works
+    "HP": { allowed: true, pdfPrefix: "HP" },           // High-Powered Hand Saw
+    "ISO": { allowed: true, pdfPrefix: "ISO" },         // Isolation
+    "OOH": { allowed: true, pdfPrefix: "OOH" },         // Out of Hours
+    "PT": { allowed: true, pdfPrefix: "PT" },           // Permit to Test
+    "PUMP": { allowed: true, pdfPrefix: "PUMP" },       // Permit to Pump
+    "USW1": { allowed: true, pdfPrefix: "USW1" },       // Utility Services L1
+    "USW2": { allowed: true, pdfPrefix: "USW2" },       // Utility Services L2
+    "WB": { allowed: true, pdfPrefix: "WB" },           // Workbox
+    "WH": { allowed: true, pdfPrefix: "WH" }            // Working at Heights
+};
+
 const getBaseOptions = (sessionKey: string, method: string) => {
     const headers: any = {
         "Content-Type": "application/json",
         "Accept": "application/json"
     };
-
     if (sessionKey) {
         headers["Key"] = sessionKey;
     }
-
     return { method, headers };
 };
 
-// Limpieza de referencia y auto-relleno de ceros (ej. '18' -> 'PF#0018')
 const formatRef = (ref: string) => {
     const cleanRef = String(ref).replace(/\D/g, '');
     const paddedRef = cleanRef.padStart(4, '0');
     return `PF%23${paddedRef}`;
 };
 
-// Parseador seguro para evitar caídas si CX devuelve HTML
 const safeParseJSON = async (response: Response, step: string) => {
     const text = await response.text();
     if (!response.ok) {
@@ -43,303 +69,204 @@ const safeParseJSON = async (response: Response, step: string) => {
     try {
         return JSON.parse(text);
     } catch (error) {
-        const titleMatch = text.match(/<title>(.*?)<\/title>/i);
-        const title = titleMatch ? titleMatch[1] : "HTML Desconocido";
-        throw new Error(`[${step}] iTwoCX devolvió HTML en vez de datos JSON. Página: "${title}". Fragmento: ${text.substring(0, 100)}...`);
+        throw new Error(`[${step}] iTwoCX devolvió HTML. Fragmento: ${text.substring(0, 100)}...`);
     }
 };
 
-// ============================================================================
-// 📄 MÓDULO DE DOCUMENTOS (Basado estrictamente en Swagger Document)
-// ============================================================================
+const performCXLogin = async (email?: string, password?: string): Promise<any> => {
+    const targetEmail = email || process.env.CX_MASTER_EMAIL;
+    const targetPassword = password || process.env.CX_MASTER_PASSWORD;
 
-export const cxGetByReference = functions.https.onRequest((req: any, res: any) => {
-    corsHandler(req, res, async () => {
-        try {
-            const { projectCode, reference } = req.query;
-            const sessionKey = req.headers['x-cx-session-key'] || req.query.sessionKey;
+    if (!targetEmail || !targetPassword) {
+        throw new Error("Missing email or password for CX login.");
+    }
 
-            if (!projectCode || !reference) return res.status(400).send({ error: "Missing projectCode or reference" });
-            if (!sessionKey) return res.status(401).send({ error: "Unauthorized: Missing sessionKey." });
+    let encryptedString = "";
+    try {
+        const encryptRes = await fetch(`${CX_API_BASE}/Login/EncryptPassword`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ Password: targetPassword })
+        });
+        const rawRes = await encryptRes.text();
+        if (!encryptRes.ok) throw new Error(`HTTP ${encryptRes.status}: ${rawRes.substring(0, 150)}`);
+        encryptedString = rawRes.replace(/^"|"$/g, '');
+    } catch (e: any) { throw new Error(`Step 1 Failed: ${e.message}`); }
 
-            const targetUrl = `${CX_API_BASE}/${projectCode}/Document/GetByReference?reference=${formatRef(reference as string)}`;
+    let loginRes: Response;
+    try {
+        loginRes = await fetch(`${CX_API_BASE}/Login/ByEmail`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ Email: targetEmail, EncryptedPassword: encryptedString })
+        });
+    } catch (e: any) { throw new Error(`Step 2 Failed: ${e.message}`); }
 
-            const response = await fetch(targetUrl, getBaseOptions(sessionKey as string, "GET"));
-            const data = await safeParseJSON(response, "GET Document");
-
-            return res.status(200).send(data);
-        } catch (error: any) {
-            return res.status(500).send({ error: error.message || "Internal failure in cxGetByReference" });
-        }
-    });
-});
-
-export const cxIssuePermit = functions.https.onRequest((req: any, res: any) => {
-    corsHandler(req, res, async () => {
-        try {
-            const { projectCode, reference } = req.query;
-            const sessionKey = req.headers['x-cx-session-key'] || req.query.sessionKey;
-
-            if (!projectCode || !reference) return res.status(400).send({ error: "Missing data" });
-            if (!sessionKey) return res.status(401).send({ error: "Unauthorized: Missing sessionKey." });
-
-            const getUrl = `${CX_API_BASE}/${projectCode}/Document/GetByReference?reference=${formatRef(reference as string)}`;
-            const getRes = await fetch(getUrl, getBaseOptions(sessionKey as string, "GET"));
-            const cxDoc: any = await safeParseJSON(getRes, "GET for Issue");
-
-            if (!cxDoc || !cxDoc.Id) throw new Error(`Invalid document received from CX`);
-
-            cxDoc.StatusName = "PERMIT ISSUED";
-
-            const updateUrl = `${CX_API_BASE}/${projectCode}/Document/Update`;
-            const options: any = getBaseOptions(sessionKey as string, "PUT");
-            options.body = JSON.stringify(cxDoc);
-
-            const updateRes = await fetch(updateUrl, options);
-            const updateData = await safeParseJSON(updateRes, "PUT for Issue");
-
-            if (updateData && updateData.IsSuccess === false) {
-                const errorMessage = updateData.ErrorMessages?.join(', ') || 'Unknown internal CX error';
-                throw new Error(`CX rejected the emission internally: ${errorMessage}`);
-            }
-
-            return res.status(200).send(updateData);
-        } catch (error: any) {
-            return res.status(500).send({ error: error.message || "Failure in cxIssuePermit" });
-        }
-    });
-});
-
-export const cxChangeStatus = functions.https.onRequest((req: any, res: any) => {
-    corsHandler(req, res, async () => {
-        try {
-            const { projectCode } = req.query;
-            const sessionKey = req.headers['x-cx-session-key'] || req.query.sessionKey;
-            const payload = req.body;
-
-            if (!projectCode || !payload) return res.status(400).send({ error: "Missing data" });
-            if (!sessionKey) return res.status(401).send({ error: "Unauthorized: Missing sessionKey." });
-
-            const targetUrl = `${CX_API_BASE}/${projectCode}/Document/Update`;
-            const options: any = getBaseOptions(sessionKey as string, "PUT");
-            options.body = JSON.stringify(payload);
-
-            const response = await fetch(targetUrl, options);
-            const data = await safeParseJSON(response, "PUT for Change Status");
-
-            if (data && data.IsSuccess === false) {
-                const errorMessage = data.ErrorMessages?.join(', ') || 'Unknown internal CX error';
-                throw new Error(`CX rejected the status change: ${errorMessage}`);
-            }
-
-            return res.status(200).send(data);
-        } catch (error: any) {
-            return res.status(500).send({ error: error.message || "Failure in cxChangeStatus" });
-        }
-    });
-});
+    const loginData = await safeParseJSON(loginRes, "POST Login ByEmail");
+    if (loginData && loginData.IsSuccess !== false && (loginData.Key || loginData.SessionKey)) {
+        return loginData;
+    }
+    throw new Error(`Step 2 Rejected.`);
+};
 
 // ============================================================================
-// 📎 MÓDULO DE ADJUNTOS (Basado estrictamente en Swagger Attachment Upload)
+// 🛑 LOBOTOMÍA HTTP
 // ============================================================================
-
-export const cxUploadAttachment = functions.https.onRequest((req: any, res: any) => {
-    corsHandler(req, res, async () => {
-        try {
-            const { projectCode, documentId } = req.query;
-            const sessionKey = req.headers['x-cx-session-key'] || req.query.sessionKey;
-            const payload = req.body;
-
-            if (!projectCode || !documentId || !payload || !payload.Content) {
-                return res.status(400).send({ error: "Missing required data (projectCode, documentId, or Content)." });
-            }
-            if (!sessionKey) return res.status(401).send({ error: "Unauthorized: Missing sessionKey." });
-
-            const targetUrl = `${CX_API_BASE}/${projectCode}/Attachment/Upload?documentId=${documentId}`;
-            const options: any = getBaseOptions(sessionKey as string, "POST");
-            options.body = JSON.stringify(payload);
-
-            const response = await fetch(targetUrl, options);
-            const data = await safeParseJSON(response, "POST Upload Attachment");
-
-            if (data && data.IsSuccess === false) {
-                const errorMessage = data.ErrorMessages?.join(', ') || 'Unknown internal CX error';
-                throw new Error(`CX rejected the attachment: ${errorMessage}`);
-            }
-
-            return res.status(200).send(data);
-        } catch (error: any) {
-            return res.status(500).send({ error: error.message || "Failure in cxUploadAttachment" });
-        }
-    });
-});
+export const cxGetByReference = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(403).send({ error: "Blocked." }); }); });
+export const cxIssuePermit = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(403).send({ error: "Blocked." }); }); });
+export const cxChangeStatus = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(403).send({ error: "Blocked." }); }); });
+export const cxUploadAttachment = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(403).send({ error: "Blocked." }); }); });
+export const cxLogin = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(403).send({ error: "Blocked." }); }); });
 
 // ============================================================================
-// 🔐 MÓDULO DE AUTENTICACIÓN (Basado estrictamente en Swagger Login)
+// 📧 BACKGROUND WORKER (DLQ)
 // ============================================================================
-
-export const cxLogin = functions.https.onRequest((req: any, res: any) => {
-    corsHandler(req, res, async () => {
-        try {
-            if (req.method !== 'POST') return res.status(405).send({ error: "Method Not Allowed" });
-
-            const { email, password } = req.body;
-
-            if (!email || !password) {
-                return res.status(400).send({ error: "Missing email or password." });
-            }
-
-            const encryptUrl = `${CX_API_BASE}/Login/EncryptPassword`;
-
-            const encryptRes = await fetch(encryptUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                body: JSON.stringify({ Password: password })
-            });
-
-            const encryptedPasswordRaw = await encryptRes.text();
-
-            if (!encryptRes.ok) {
-                throw new Error(`[Encrypt API] HTTP ${encryptRes.status}: ${encryptedPasswordRaw.substring(0, 100)}`);
-            }
-
-            const cleanEncryptedPassword = encryptedPasswordRaw.replace(/^"|"$/g, '');
-
-            if (!cleanEncryptedPassword || cleanEncryptedPassword === "null") {
-                throw new Error(`[Encrypt API] Devuelve null o vacío. Revisa la contraseña.`);
-            }
-
-            const loginUrl = `${CX_API_BASE}/Login/ByEmail`;
-            const loginPayload = {
-                Email: email,
-                EncryptedPassword: cleanEncryptedPassword
-            };
-
-            const loginRes = await fetch(loginUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                body: JSON.stringify(loginPayload)
-            });
-
-            const loginData = await safeParseJSON(loginRes, "POST Login ByEmail");
-
-            if (loginData && loginData.IsSuccess === false) {
-                const errorMessage = loginData.ErrorMessages?.join(', ') || 'Invalid credentials';
-                return res.status(401).send({ error: errorMessage });
-            }
-
-            return res.status(200).send(loginData);
-
-        } catch (error: any) {
-            console.error("CX Login Error:", error);
-            return res.status(500).send({ error: error.message || "Internal failure during CX login." });
-        }
-    });
-});
-
-// ============================================================================
-// 📧 MÓDULO DE ALERTAS Y VIGÍA DE FIREBASE
-// ============================================================================
-
 const transporter = nodemailer.createTransport({
     service: 'gmail',
-    auth: {
-        user: 'EBApermits@gmail.com',
-        pass: 'umuymnsyxqnnmshz'
-    }
+    auth: { user: 'EBApermits@gmail.com', pass: 'umuymnsyxqnnmshz' }
 });
+const ALERT_EMAILS = 'dietrichtruchsess@gmail.com, dietrich.truchsess@easternbusway.nz';
 
-// 🚀 LISTA DE DISTRIBUCIÓN MAESTRA PARA ERRORES DE SISTEMA
-const ALERT_EMAILS = 'dietrich.truchsess@easternbusway.nz';
-
-export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}', async (event: any) => {
-    if (!event.data) return;
-
-    const newValue = event.data.after.data();
-    const previousValue = event.data.before.data();
-    const permitId = event.params.permitId;
+const processPendingPermitSync = async (permitId: string, newValue: any, previousValue: any) => {
     const permitNumber = newValue.itwocxNumber || newValue.permitNumber || permitId;
+    
+    // 🚀 EXTRACCIÓN DINÁMICA DEL TIPO DE PERMISO
+    const rawType = (newValue.permitType || "EXCAVATION").toUpperCase();
+    const typeConfig = PERMIT_CONFIG[rawType] || { allowed: true, pdfPrefix: "PF" };
 
-    // ========================================================================
-    // 🚨 LÓGICA 1: FALLO DE SINCRONIZACIÓN CX (Se envía al Document Controller)
-    // ========================================================================
-    if (newValue.cxSyncPending && previousValue.cxSyncPending !== newValue.cxSyncPending) {
-        const action = newValue.cxSyncPending === 'issue' ? 'Issuance' : 'Closure';
-        const errorMessage = newValue.cxSyncError || 'Unknown error';
-        const userInField = newValue.cxSyncPending === 'issue' ? newValue.issuerSignature?.name : newValue.closureReceiverName;
-
-        const mailAttachments: any[] = [];
-        let attachmentNotice = `<p style="color: #dc2626; font-size: 14px;"><strong>Note:</strong> PDF Backup not available for attachment.</p>`;
-
-        if (newValue.pdfBackupUrl) {
-            mailAttachments.push({
-                filename: `EB_Permit_PF${permitNumber}_Backup.pdf`,
-                path: newValue.pdfBackupUrl
-            });
-            attachmentNotice = `
-                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 6px; margin: 20px 0;">
-                    <p style="color: #16a34a; font-weight: bold; margin: 0; font-size: 15px;">✅ PDF Attached Successfully</p>
-                    <p style="color: #15803d; margin: 5px 0 0 0; font-size: 13px;">The completed permit has been attached to this email. You can directly upload it to iTwoCX.</p>
-                </div>
-            `;
-        }
-
-        const mailOptions = {
-            from: '"Can you dig it - System" <EBApermits@gmail.com>',
-            to: ALERT_EMAILS,
-            subject: `🚨 ACTION REQUIRED: CX Sync Failed on PF#${permitNumber}`,
-            html: `
-                <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 8px;">
-                    <h2 style="color: #d97706; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-top: 0;">iTwoCX Synchronization Failure</h2>
-                    <p><strong>Permit:</strong> PF#${permitNumber}</p>
-                    <p><strong>Attempted Action:</strong> ${action}</p>
-                    <p><strong>Field User:</strong> ${userInField || 'Unknown'}</p>
-                    
-                    <div style="background-color: #fef2f2; padding: 15px; border-left: 4px solid #dc2626; margin: 15px 0;">
-                        <p style="margin: 0;"><strong>Error reported by CX Server:</strong></p>
-                        <p style="color: #dc2626; font-weight: bold; font-family: monospace; margin: 5px 0 0 0;">${errorMessage}</p>
-                    </div>
-                    ${attachmentNotice}
-                    <hr style="border: 1px solid #eee; margin-top: 20px;">
-                    <p style="font-size: 12px; color: #666; text-align: center;">
-                        <em>The permit data is fully preserved in the Firebase database. No data was lost.</em><br>
-                        <em>System Administration - EBA Digital Permits</em>
-                    </p>
-                </div>
-            `,
-            attachments: mailAttachments
-        };
-
+    if (newValue.sync_status === 'pending' || newValue.syncStatus === 'pending') {
+        const action = newValue.cxSyncPending === 'closure' ? 'Closure' : 'Issuance';
+        const userInField = newValue.cxSyncPending === 'closure' ? newValue.closureReceiverName : newValue.issuerSignature?.name;
+        
         try {
-            await transporter.sendMail(mailOptions);
-            console.log(`[ALERT] Sync failure email sent for PF#${permitNumber}`);
-        } catch (error) {
-            console.error('[ERROR] Failed to send sync failure email:', error);
+            if (!process.env.CX_MASTER_EMAIL || !process.env.CX_MASTER_PASSWORD) throw new Error("Missing master credentials.");
+            const loginData = await performCXLogin();
+            const sessionKey = loginData.Key || loginData.SessionKey;
+            if (!sessionKey) throw new Error("Auto-login failed.");
+
+            const configDoc = await db.collection("settings").doc("config").get();
+            const configData = configDoc.exists ? configDoc.data() : {};
+            const isDemoMode = configData?.environment === 'demo_mode' || configData?.acceptLiveTraffic === false || newValue.environment === 'demo' || String(newValue.projectCode || '').toUpperCase().includes('DEMO');
+            const targetProjectCode = isDemoMode ? 'EB-DEMO' : 'EB';
+            
+            // 1. OBTENER ID INTERNO Y DOCUMENTO COMPLETO
+            const getUrl = `${CX_API_BASE}/${targetProjectCode}/Document/GetByReference?reference=${formatRef(permitNumber as string)}`;
+            const getRes = await fetch(getUrl, getBaseOptions(sessionKey as string, "GET"));
+            const cxDoc: any = await safeParseJSON(getRes, `GET for Async ${action}`);
+            if (!cxDoc || !cxDoc.Id) throw new Error("Invalid document received from CX");
+
+            // 🚀 SONAR PING: Imprimir en consola qué acciones permite este documento actualmente
+            console.log(`[SONAR] CX DOC DATA FOR PF#${permitNumber} [TYPE: ${rawType}]:`, JSON.stringify({
+                StatusName: cxDoc.StatusName,
+                ActionCodes: cxDoc.ActionCodes || "N/A",
+                Actions: cxDoc.Actions || "N/A",
+                Transitions: cxDoc.Transitions || "N/A"
+            }));
+
+            // 2. 🚀 INYECTAR PDF SI ES CIERRE
+            if (action === 'Closure' && newValue.pdfBackupUrl) {
+                try {
+                    console.log(`[DLQ] Downloading PDF from Firebase to upload to CX...`);
+                    const pdfRes = await fetch(newValue.pdfBackupUrl);
+                    const arrayBuffer = await pdfRes.arrayBuffer();
+                    const base64Pdf = Buffer.from(arrayBuffer).toString('base64');
+
+                    const uploadUrl = `${CX_API_BASE}/${targetProjectCode}/Attachment/Upload?documentId=${cxDoc.Id}`;
+                    
+                    // 🚀 NOMBRAMIENTO DINÁMICO DEL PDF USANDO EL DICCIONARIO
+                    const uploadPayload = {
+                        Name: `${typeConfig.pdfPrefix}_${permitNumber}_Closed.pdf`,
+                        ChunkId: 1,
+                        ChunkTotal: 1,
+                        Content: base64Pdf
+                    };
+                    
+                    const uploadOptions: any = getBaseOptions(sessionKey as string, "POST");
+                    uploadOptions.body = JSON.stringify(uploadPayload);
+                    
+                    const uploadRes = await fetch(uploadUrl, uploadOptions);
+                    const uploadData = await safeParseJSON(uploadRes, `POST Attachment`);
+                    
+                    if (uploadData && uploadData.IsSuccess === false) {
+                        console.warn(`[DLQ] CX Attachment Upload Warning:`, uploadData.ErrorMessages);
+                    } else {
+                        console.log(`[DLQ] ✅ Successfully uploaded PDF to CX for PF#${permitNumber}`);
+                    }
+                } catch (pdfErr: any) {
+                    console.error("[DLQ] Failed to upload PDF to CX:", pdfErr.message);
+                }
+            }
+
+            // 3. 🚀 UPDATE COMPLETO CON LA PALABRA MÁGICA REVELADA
+            const updateUrl = `${CX_API_BASE}/${targetProjectCode}/Document/Update`;
+            const options: any = getBaseOptions(sessionKey as string, "PUT");
+            
+            const updatePayload: any = { ...cxDoc };
+
+            if (action === 'Issuance') {
+                updatePayload.StatusName = "PERMIT ISSUED";
+                updatePayload.ActionCodes = ["ISSUE"];
+            } else {
+                updatePayload.StatusName = "CLOSED"; // <--- AQUÍ ESTÁ EL CAMBIO CRÍTICO
+                updatePayload.ActionCodes = ["CLOSE"];
+            }
+            
+            options.body = JSON.stringify(updatePayload);
+
+            const updateRes = await fetch(updateUrl, options);
+            const updateData = await safeParseJSON(updateRes, `PUT for Async ${action}`);
+
+            // 🚀 SONAR PING: Ver qué respondió realmente iTwoCX a nuestra solicitud de cambio
+            console.log(`[SONAR] UPDATE RESPONSE FROM iTwoCX:`, JSON.stringify(updateData));
+
+            if (updateData && updateData.IsSuccess === false) {
+                const errorMessage = updateData.ErrorMessages?.join(', ') || `API rejected.`;
+                throw new Error(errorMessage);
+            }
+
+            // ÉXITO
+            await db.collection('permits').doc(permitId).update({
+                sync_status: 'synced', syncStatus: 'synced', cxSyncPending: null, cxSyncError: null, sync_error: null, lastSyncedAt: new Date().toISOString()
+            });
+
+        } catch (error: any) {
+            console.error(`[DLQ Worker] Sync failed:`, error.message);
+            const errorMessage = error.message || 'Unknown Error';
+
+            await db.collection('permits').doc(permitId).update({ 
+                sync_status: 'failed', syncStatus: 'failed', sync_error: errorMessage, cxSyncError: errorMessage, failedAt: new Date().toISOString()
+            });
+
+            const mailAttachments: any[] = [];
+            if (newValue.pdfBackupUrl) mailAttachments.push({ filename: `PF${permitNumber}_Backup.pdf`, path: newValue.pdfBackupUrl });
+
+            const mailOptions = {
+                from: '"Can you dig it - System" <EBApermits@gmail.com>',
+                to: ALERT_EMAILS,
+                subject: `🚨 ACTION REQUIRED: CX Sync Failed on PF#${permitNumber}`,
+                html: `
+                    <div style="font-family: sans-serif; padding: 20px;">
+                        <h2 style="color:red; margin-top:0;">Falla de sincronización con iTwoCX</h2>
+                        <p><strong>Permiso Tipo:</strong> ${rawType}</p>
+                        <p><strong>Acción:</strong> ${action}</p>
+                        <p><strong>Usuario en Campo:</strong> ${userInField || 'Desconocido'}</p>
+                        <p><strong>Error arrojado por CX:</strong> ${errorMessage}</p>
+                    </div>
+                `,
+                attachments: mailAttachments
+            };
+            try { await transporter.sendMail(mailOptions); } catch (e) {}
         }
     }
 
-    // ========================================================================
-    // 👷‍♂️ LÓGICA 2: AVISO AL APPROVER DE TRABAJO MECÁNICO (Part B Pending)
-    // ========================================================================
+    // 👷‍♂️ LÓGICA AVISO APPROVER MECÁNICA (Intacta)
     const isNowIssued = newValue.status === 'issued' && previousValue.status !== 'issued';
     const isMechanical = newValue.excavationType === 'mechanical';
     const needsApprover = !newValue.approverSignature?.data;
 
     if (isNowIssued && isMechanical && needsApprover) {
-        console.log(`[NOTIFY] High Risk Work Detected: Generating Approver Alert for PF#${permitNumber}`);
-
-        // Extraer datos del Ingeniero (Si no hay email, avisamos)
         const engineerName = newValue.siteEngineerSignature?.name || 'Not specified';
         const engineerEmail = newValue.createdBy || 'Email not recorded';
 
-        // Buscar Approvers dinámicamente en Firestore
-        let approverEmailsList = 'tommy.temple@easternbusway.nz, krishna.nand@easternbusway.nz'; // Lista por defecto de seguridad
+        let approverEmailsList = 'tommy.temple@easternbusway.nz, krishna.nand@easternbusway.nz';
         try {
             const settingsDoc = await db.collection('appSettings').doc('global').get();
             if (settingsDoc.exists) {
@@ -352,108 +279,27 @@ export const notifyMasterOnSyncFailure = onDocumentUpdated('permits/{permitId}',
                     approverEmailsList = approvers.join(', ');
                 }
             }
-        } catch (err) {
-            console.error("⚠️ Error reading dynamic approvers from cloud, using fallback.", err);
-        }
+        } catch (err) { }
 
         const notifyOptions = {
             from: '"Can you dig it - Safety Bot" <EBApermits@gmail.com>',
             to: approverEmailsList,
-            cc: ALERT_EMAILS, // Dietrich queda en copia para auditoría
+            cc: ALERT_EMAILS,
             subject: `⚠️ ACTION REQUIRED: Part B Approval Pending - PF#${permitNumber}`,
-            html: `
-                <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                    <div style="background-color: #fef3c7; border-left: 6px solid #d97706; padding: 15px; margin-bottom: 25px; border-radius: 4px;">
-                        <h2 style="color: #92400e; margin: 0; font-size: 18px; text-transform: uppercase; letter-spacing: 1px;">Mechanical Excavation Issued</h2>
-                        <p style="margin: 5px 0 0 0; font-size: 14px; font-weight: bold;">Site verification required before works commence.</p>
-                    </div>
-
-                    <div style="background-color: #f9fafb; padding: 15px; border-radius: 8px; margin-bottom: 25px;">
-                        <table style="width: 100%; font-size: 14px;">
-                            <tr><td style="padding: 4px 0; color: #6b7280; width: 120px;">Permit Number:</td><td style="font-weight: bold; color: #111827;">PF#${permitNumber}</td></tr>
-                            <tr><td style="padding: 4px 0; color: #6b7280;">Location:</td><td style="font-weight: bold; color: #111827;">${newValue.location || 'Not specified'}</td></tr>
-                            <tr><td style="padding: 4px 0; color: #6b7280;">Issued By:</td><td style="font-weight: bold; color: #111827;">${newValue.issuerSignature?.name || 'Authorized Issuer'}</td></tr>
-                            <tr><td style="padding: 4px 0; color: #6b7280;">Site Engineer:</td><td style="font-weight: bold; color: #2563eb;">${engineerName}</td></tr>
-                            <tr><td style="padding: 4px 0; color: #6b7280;">Engineer Email:</td><td style="color: #4b5563;">${engineerEmail}</td></tr>
-                        </table>
-                    </div>
-                    
-                    <div style="margin: 35px 0; text-align: center;">
-                        <a href="https://eba-digital-permits.web.app/#/permit/${permitId}" 
-                           style="background-color: #1d4ed8; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 900; font-size: 14px; display: inline-block; letter-spacing: 1px; text-transform: uppercase;">
-                            Review & Sign Part B
-                        </a>
-                    </div>
-
-                    <p style="font-size: 13px; color: #6b7280; line-height: 1.6; background-color: #f3f4f6; padding: 12px; border-radius: 6px;">
-                        <strong>Safety Standard Reminder:</strong> As per EBA policies, mechanical excavation cannot commence until the assigned Permit Approver has physically verified the site conditions and signed Part B.
-                    </p>
-                </div>
-            `
+            html: `<p>Se requiere aprobación para excavación mecánica. Permiso PF#${permitNumber}.</p>
+                   <p>Ingeniero a cargo: <b>${engineerName}</b> (${engineerEmail})</p>`
         };
 
-        try {
-            await transporter.sendMail(notifyOptions);
-            console.log(`[NOTIFY] Approver alert sent successfully for PF#${permitNumber}`);
-        } catch (error) {
-            console.error('[ERROR] Failed to send approver notification:', error);
-        }
+        try { await transporter.sendMail(notifyOptions); } catch (error) {}
     }
+};
+
+export const onPermitWritten = onDocumentWritten('permits/{permitId}', async (event: any) => {
+    if (!event.data || !event.data.after || !event.data.after.exists) return;
+    const newValue = event.data.after.data();
+    const previousValue = event.data.before && event.data.before.exists ? event.data.before.data() : {};
+    await processPendingPermitSync(event.params.permitId, newValue, previousValue);
 });
 
-// ============================================================================
-// 📥 MÓDULO DE WEBHOOK RECEPCIÓN (iTwoCX -> Can You Dig It)
-// ============================================================================
-
-export const cxIncomingWebhook = functions.https.onRequest((req: any, res: any) => {
-    corsHandler(req, res, async () => {
-        if (req.method !== "POST") {
-            return res.status(405).send({ error: "Method Not Allowed. This webhook only accepts POST requests." });
-        }
-
-        try {
-            console.log("📥 ¡Mensaje Webhook recibido desde iTwoCX!", req.body);
-
-            const cxData = req.body || {};
-
-            // 🚀 Generamos un ID único usando la estructura nativa de Firebase para evitar problemas de compatibilidad
-            const permitId = db.collection("permits").doc().id;
-
-            const permitNumber = cxData.DocumentReference || cxData.DocumentId || `NEW-${Date.now()}`;
-            const location = cxData.Location || cxData.Area || "Location Pending";
-            const requestedBy = cxData.CreatedBy || cxData.Author || "iTwoCX System";
-
-            // Construir el esqueleto del Permiso DRAFT para la App
-            const newDraftPermit = {
-                id: permitId,
-                permitNumber: permitNumber,
-                itwocxNumber: permitNumber,
-                location: location,
-                excavationType: "mechanical", // Valor por defecto
-                status: "draft",             // ¡Crucial! Entra como borrador
-                isDraft: true,
-                createdAt: new Date().toISOString(),
-                cxSyncPending: null,
-                cxSyncError: null,
-                syncStatus: "synced",
-                otherNotes: `Borrador generado automáticamente mediante Webhook desde iTwoCX.\nSolicitado por: ${requestedBy}`
-            };
-
-            // Guardar en Firestore
-            await db.collection("permits").doc(permitId).set(newDraftPermit);
-
-            console.log(`✅ Permiso DRAFT PF#${permitNumber} creado con éxito en Firestore vía Webhook.`);
-
-            // Responder a CX para que sepa que recibimos el mensaje exitosamente
-            return res.status(200).send({
-                success: true,
-                message: "Draft successfully created in Can You Dig It.",
-                permitId: permitId
-            });
-
-        } catch (error: any) {
-            console.error("❌ Error procesando el Webhook de CX:", error);
-            return res.status(500).send({ error: error.message || "Internal Server Error processing the webhook." });
-        }
-    });
-});
+export const cxIncomingWebhook = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(200).send({ success: true }); }); });
+export const emergencyCleanup = functions.https.onRequest((req: any, res: any) => { corsHandler(req, res, async () => { res.status(200).send({ message: "Desactivado" }); }); });

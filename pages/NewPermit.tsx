@@ -1,9 +1,11 @@
+// ARCHIVO: src/pages/NewPermit.tsx
 import React, { useState, useRef } from 'react';
+import { useLocation } from 'react-router-dom'; // 🚀 Importación clave para atrapar el tipo de permiso
 import { ArrowLeft, CheckCircle, AlertOctagon, Info, Camera, ImageIcon, Loader2, Trash2, Briefcase, ShieldCheck, Lock, Users, CloudUpload } from 'lucide-react';
 import { Permit, PermitPhoto, INITIAL_PART_A, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST, INITIAL_PART_B } from '../types';
 import { generatePermitNumber, savePermit, getPermits } from '../services/storage';
 import SignaturePad from '../components/SignaturePad';
-import { submitPermitToCX, issuePermitToCX, getUserRole } from '../services/cx';  
+import { getUserRole } from '../services/cx';  
 import { uploadImageToStorage, db } from '../firebase'; 
 import { doc, setDoc } from 'firebase/firestore'; 
 
@@ -37,12 +39,17 @@ const compressImage = (file: File): Promise<string> => {
 };
 
 const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
+    const location = useLocation();
+    // 🚀 Atrapa el tipo de permiso enviado por el Dashboard, por defecto asume BG (Breaking Ground)
+    const incomingPermitType = location.state?.permitType || 'BG';
+
     const [activeTab, setActiveTab] = useState<'engineer' | 'receiver' | 'photos' | 'issuer'>('engineer');
 
     const [formData, setFormData] = useState<Permit>({
         id: crypto.randomUUID(),
         permitNumber: generatePermitNumber(),
         itwocxNumber: '',
+        permitType: incomingPermitType, // 🚀 Guardado automático en el estado
         status: 'active',
         createdAt: new Date().toISOString(),
         location: '',
@@ -82,9 +89,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
         setFormData(prev => ({ ...prev, [listName]: prev[listName].map(item => item.id === id ? { ...item, answer: answer as any, comment: comment ?? item.comment } : item) }));
     };
 
-    // ============================================================================
-    // 🚦 INDICADORES VISUALES
-    // ============================================================================
     const validateEngineerComplete = (): boolean => {
         if (!formData.itwocxNumber || !formData.location || !formData.scopeOfWorks) return false;
         const pendingA = formData.partAChecklist.find(i => !['4','5','6','7'].includes(i.id) && (!i.answer));
@@ -112,9 +116,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
     const isReceiverDone = validateReceiverComplete();
     const isIssuerDone = validateIssuerComplete();
 
-    // ============================================================================
-    // FOTOS Y GUARDADO EN LA NUBE
-    // ============================================================================
     const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         setIsUploadingPhoto(true); 
@@ -166,7 +167,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
     };
 
     const handleSaveAndIssue = async () => {
-        // Validación del ISSUER antes de emitir (El Juez Final)
         let errors = [];
         if (!isEngineerDone) errors.push("- Site Engineer section is incomplete or missing signature.");
         if (!isReceiverDone) errors.push("- Receiver checklist is incomplete or missing signature.");
@@ -190,15 +190,23 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
         savePermit(finalData);
         setIsSubmitting(true);
 
+        const toast = { success: (msg: string) => alert(`✅ ${msg}`) };
         try {
             const permitRef = doc(db, 'permits', finalData.id);
-            await setDoc(permitRef, { ...finalData, isDraft: false, lastUpdated: new Date().toISOString() }, { merge: true });
+            
+            await setDoc(permitRef, { 
+                ...finalData, 
+                isDraft: false, 
+                sync_status: 'pending',
+                syncStatus: 'pending',
+                cxSyncPending: 'issue',
+                lastUpdated: new Date().toISOString() 
+            }, { merge: true });
 
-            await issuePermitToCX({ ...finalData, itwocxNumber: rawNum });
-            alert(`🎉 SUCCESS!\n\nPermit Issued and lodged to iTwoCX.`);
+            toast.success('Permit Saved Locally. The system will sync it in the background.');
             onComplete(); 
         } catch (error: any) {
-            alert(`⚠️ Saved Locally & in Cloud, BUT failed to lodge to iTwoCX.\n\nError: ${error.message}`);
+            alert(`⚠️ Error saving permit to database: ${error.message}`);
             onComplete();
         } finally { setIsSubmitting(false); }
     };
@@ -238,13 +246,13 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
             <div className="flex items-center justify-between mb-6"><button onClick={onCancel} className="text-gray-500 font-bold bg-white px-4 py-2 rounded-lg shadow-sm border"><ArrowLeft size={16} className="inline mr-1" /> Back</button></div>
             
             <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 shadow-sm mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-                <h2 className="text-xl sm:text-2xl font-black uppercase text-gray-800">Draft Permit: PF#{formData.itwocxNumber.replace(/\D/g, "")}</h2>
+                {/* 🚀 Título Dinámico que muestra el tipo de permiso que se está llenando */}
+                <h2 className="text-xl sm:text-2xl font-black uppercase text-gray-800">Draft {incomingPermitType} Permit: PF#{formData.itwocxNumber.replace(/\D/g, "")}</h2>
                 <div className="bg-blue-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest text-center flex items-center gap-2">
                     <CloudUpload size={14}/> Cloud Sync Ready
                 </div>
             </div>
             
-            {/* TABS (Libre navegación) */}
             <div className="flex border-b-4 border-gray-100 bg-white sticky top-0 z-40 shadow-sm overflow-x-auto hide-scrollbar mb-6">
                 <button onClick={() => setActiveTab('engineer')} className={`px-4 md:px-6 py-4 text-[10px] md:text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'engineer' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>
                     <Briefcase size={16} /> 1. Engineer {isEngineerDone && <CheckCircle size={14} className="text-green-500"/>}
@@ -262,7 +270,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
 
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-5 sm:p-8 mb-6 relative">
                 
-                {/* TAB: SITE ENGINEER */}
                 <div className={activeTab === 'engineer' ? 'block animate-fade-in' : 'hidden'}>
                     <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Site Engineer Section</h3>
                     
@@ -321,7 +328,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
                     </div>
                 </div>
 
-                {/* TAB: RECEIVER */}
                 <div className={activeTab === 'receiver' ? 'block animate-fade-in' : 'hidden'}>
                     <ReadOnlyPermitHeader />
                     <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Permit Receiver Section</h3>
@@ -359,7 +365,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
                     </div>
                 </div>
 
-                {/* TAB: PHOTOS */}
                 <div className={activeTab === 'photos' ? 'block animate-fade-in' : 'hidden'}>
                     <ReadOnlyPermitHeader />
                     <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 flex items-center gap-2 mb-6"><ImageIcon size={22}/> Site Photos</h3>
@@ -386,7 +391,6 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
                     </div>
                 </div>
 
-                {/* TAB: ISSUER (FINAL) */}
                 <div className={activeTab === 'issuer' ? 'block animate-fade-in' : 'hidden'}>
                     <ReadOnlyPermitHeader />
                     <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Issuer Authorization</h3>
@@ -408,7 +412,7 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
 
                         <button onClick={handleSaveAndIssue} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
                             {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CheckCircle size={28} />}
-                            {isSubmitting ? 'Lodging PDF to iTwoCX...' : 'Issue Permit to CX'}
+                            {isSubmitting ? 'Saving to Database...' : 'Issue Permit to Database'}
                         </button>
                     </div>
                 </div>
