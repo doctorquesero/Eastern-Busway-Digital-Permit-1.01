@@ -1,9 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
-import { getAuth } from "firebase/auth"; // 🚀 NUEVO: Importamos el módulo de Autenticación
+import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
 
-// Tus credenciales oficiales de Firebase (eba-digital-permits)
 const firebaseConfig = {
   apiKey: "AIzaSyAry8scf3DziPEltqbpYTHCr2Dy-N029ck",
   authDomain: "eba-digital-permits.firebaseapp.com",
@@ -13,19 +12,13 @@ const firebaseConfig = {
   appId: "1:521871702908:web:c67a9fe99a5fe870e582f9"
 };
 
-// Inicializamos la aplicación de Firebase
 const app = initializeApp(firebaseConfig);
-
-// Exportamos la base de datos de texto (Mantiene tu sistema actual funcionando)
 export const db = getFirestore(app);
-
-// Exportamos el disco duro para guardar las fotos pesadas
 export const storage = getStorage(app);
-
-// 🚀 NUEVO: Exportamos el sistema de inicio de sesión para que el Modal lo use
 export const auth = getAuth(app);
 
-// Función que sube la foto a la nube y devuelve el Link ligero al celular
+// 🚀 La persistencia ahora se maneja dinámicamente en LoginModal.tsx
+
 export const uploadImageToStorage = async (base64String: string, filename: string): Promise<string> => {
   try {
     const storageRef = ref(storage, `permit_photos/${filename}`);

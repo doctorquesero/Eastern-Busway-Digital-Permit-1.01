@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { LogIn, X, Loader2, UserPlus, KeyRound } from 'lucide-react';
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
-import { assignUserRoleByEmail, getProjectCode } from '../services/cx'; 
+import { LogIn, X, Loader2, UserPlus, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'firebase/auth';
+import { assignUserRoleByEmail } from '../services/cx'; 
 
 interface LoginModalProps {
     isOpen: boolean;
@@ -13,6 +13,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
     const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false); // 🚀 ESTADO PARA EL OJO
+    const [keepSignedIn, setKeepSignedIn] = useState(true); // Persistence state
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null); 
@@ -28,9 +30,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
         try {
             const auth = getAuth();
             
+            if (mode !== 'reset') {
+                await setPersistence(auth, keepSignedIn ? browserLocalPersistence : browserSessionPersistence);
+            }
+            
             if (mode === 'reset') {
+                auth.languageCode = 'en'; // Force English email template
                 await sendPasswordResetEmail(auth, email);
-                setMessage('A password reset link has been sent to your email.');
+                setMessage('✅ A password reset link has been sent to your email. Please check your inbox (and spam folder).');
                 setLoading(false);
                 return; 
             }
@@ -41,35 +48,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 await signInWithEmailAndPassword(auth, email, password);
             }
 
-            // 🚀 AHORA EL PROJECT CODE VIENE DE LA BASE DE DATOS (VIA CACHÉ)
-            const activeProjectCode = getProjectCode();
-
-            try {
-                const response = await fetch('https://us-central1-eba-digital-permits.cloudfunctions.net/cxLogin', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        email: email, 
-                        password: password, 
-                        projectCode: activeProjectCode 
-                    })
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Fallo de conexión con iTwoCX.');
-                }
-
-                if (data.IsSuccess && data.Key) {
-                    localStorage.setItem('cxSessionKey', data.Key);
-                } else {
-                    throw new Error(data.ErrorMessages?.join(', ') || 'Credenciales de CX inválidas.');
-                }
-
-            } catch (cxErr: any) {
-                console.error("⚠️ Error en la conexión invisible con CX:", cxErr);
-            }
+            // CX session is handled silently by the backend Cloud Function (onPermitWritten).
+            // No direct frontend-to-CX communication is permitted.
 
             // 🚀 FIX: AHORA ESPERAMOS (AWAIT) A QUE LA BASE DE DATOS NOS DIGA EL ROL
             const roleAssigned = await assignUserRoleByEmail(email);
@@ -158,17 +138,35 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                                 <label className="block text-sm font-medium text-slate-400 mb-1.5">
                                     Password {mode === 'signup' && '(Min. 6 characters)'}
                                 </label>
-                                <input
-                                    type="password"
-                                    required
-                                    minLength={6}
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                                    placeholder="••••••••"
-                                />
+                                <div className="relative">
+                                    <input
+                                        type={showPassword ? "text" : "password"}
+                                        required
+                                        minLength={6}
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 pr-12 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                                        placeholder="••••••••"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-200 transition-colors focus:outline-none"
+                                    >
+                                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                    </button>
+                                </div>
                                 {mode === 'login' && (
-                                    <div className="flex justify-end mt-2">
+                                    <div className="flex justify-between items-center mt-3">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={keepSignedIn} 
+                                                onChange={(e) => setKeepSignedIn(e.target.checked)}
+                                                className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-blue-500 focus:ring-blue-500/50"
+                                            />
+                                            <span className="text-sm font-medium text-slate-300">Keep me signed in</span>
+                                        </label>
                                         <button 
                                             type="button" 
                                             onClick={() => { setMode('reset'); setError(null); setMessage(null); }} 

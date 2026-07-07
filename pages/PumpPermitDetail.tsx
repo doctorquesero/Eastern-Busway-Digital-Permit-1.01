@@ -11,6 +11,7 @@ import ReactDOM from 'react-dom/client';
 import PumpPermitPDFLayout from '../components/PumpPermitPDFLayout';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { getTargetCollection } from '../utils/appMode';
 
 interface PumpPermitDetailProps {
     id: string;
@@ -66,7 +67,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                 setLoading(false);
             }
             try {
-                const docRef = doc(db, 'permits', id);
+                const docRef = doc(db, getTargetCollection(), id);
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     setPermit(docSnap.data() as Permit);
@@ -84,7 +85,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         setIsSaving(true);
         try {
             savePermit(updatedPermit);
-            const docRef = doc(db, 'permits', updatedPermit.id);
+            const docRef = doc(db, getTargetCollection(), updatedPermit.id);
             await setDoc(docRef, { ...updatedPermit, lastUpdated: new Date().toISOString() }, { merge: true });
             setPermit(updatedPermit);
         } catch (error) {
@@ -155,7 +156,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         
         setIsSubmitting(true);
         try {
-            const permitRef = doc(db, 'permits', finalData.id);
+            const permitRef = doc(db, getTargetCollection(), finalData.id);
             await setDoc(permitRef, { ...finalData, lastUpdated: new Date().toISOString() }, { merge: true });
 
             savePermit(finalData);
@@ -244,7 +245,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                         finalUpdatedPermit = { ...finalUpdatedPermit, pdfBackupUrl: downloadUrl };
                     } catch (storageError) { console.error("Backup PDF Error:", storageError); }
 
-                    const docRef = doc(db, 'permits', finalUpdatedPermit.id);
+                    const docRef = doc(db, getTargetCollection(), finalUpdatedPermit.id);
                     await setDoc(docRef, { ...finalUpdatedPermit, lastUpdated: new Date().toISOString() }, { merge: true });
                     savePermit(finalUpdatedPermit);
                     setPermit(finalUpdatedPermit);

@@ -8,6 +8,7 @@ import SignaturePad from '../components/SignaturePad';
 import { getUserRole } from '../services/cx';  
 import { uploadImageToStorage, db } from '../firebase'; 
 import { doc, setDoc } from 'firebase/firestore'; 
+import { getTargetCollection } from '../utils/appMode';
 
 interface NewPermitProps {
     onCancel: () => void;
@@ -150,7 +151,7 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
         setIsSavingDraft(true);
         try {
             savePermit(formData); 
-            const permitRef = doc(db, 'permits', formData.id);
+            const permitRef = doc(db, getTargetCollection(), formData.id);
             await setDoc(permitRef, { 
                 ...formData, 
                 lastUpdated: new Date().toISOString(),
@@ -192,7 +193,7 @@ const NewPermit: React.FC<NewPermitProps> = ({ onCancel, onComplete }) => {
 
         const toast = { success: (msg: string) => alert(`✅ ${msg}`) };
         try {
-            const permitRef = doc(db, 'permits', finalData.id);
+            const permitRef = doc(db, getTargetCollection(), finalData.id);
             
             await setDoc(permitRef, { 
                 ...finalData, 

@@ -142,6 +142,8 @@ export interface Permit {
     crewMembers: CrewMember[];
     otherNotes: string;
     photos: PermitPhoto[];
+    approverComments?: Record<string, string>;
+    issuerComments?: Record<string, string>;
     ceaseWorksRecord?: CeaseWorksRecord;
     
     // Closure (Pg 11)

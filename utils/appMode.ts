@@ -13,3 +13,8 @@ export const setAppMode = (mode: 'LIVE' | 'DEMO') => {
 export const getProjectCode = (): string => {
     return getAppMode() === 'DEMO' ? 'EB-DEMO' : 'EB';
 };
+
+// Colección dual
+export const getTargetCollection = (): string => {
+    return getAppMode() === 'LIVE' ? 'permits' : 'permits_demo';
+};

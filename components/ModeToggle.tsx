@@ -1,72 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Loader2 } from 'lucide-react';
-import { getCurrentUserEmail } from '../services/cx';
+import { getAppMode, setAppMode } from '../utils/appMode';
 
 export const ModeToggle: React.FC = () => {
-    const [isLive, setIsLive] = useState<boolean | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-
-    const currentUser = getCurrentUserEmail().toLowerCase();
-    const isMaster = currentUser.includes('master') || currentUser.includes('dietrich') || currentUser.includes('eba-dt');
+    const [isLive, setIsLive] = useState<boolean>(true);
 
     useEffect(() => {
-        const fetchConfig = async () => {
-            try {
-                const docRef = doc(db, 'settings', 'config');
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    setIsLive(docSnap.data().acceptLiveTraffic !== false && docSnap.data().environment !== 'demo_mode');
-                } else {
-                    setIsLive(true); // Default
-                }
-            } catch (e) {
-                console.error("Error fetching config:", e);
-                setIsLive(true);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchConfig();
+        setIsLive(getAppMode() === 'LIVE');
     }, []);
 
-    const handleToggle = async () => {
-        if (!isMaster) return alert("Access Denied: Master Clearance Required.");
+    const handleToggle = () => {
         const newIsLive = !isLive;
         
         const confirmMessage = newIsLive 
-            ? "Are you sure you want to activate LIVE MODE? (Accepts incoming Cx data)" 
-            : "Are you sure you want to switch to DEMO MODE? (Blocks incoming Cx data)";
+            ? "Are you sure you want to activate LIVE MODE? (Data will be saved to the live database and synced to iTwoCX)" 
+            : "Are you sure you want to switch to DEMO MODE? (Data will be saved to a separate test database and synced to the EB-DEMO iTwoCX project)";
             
         if (window.confirm(confirmMessage)) {
-            setIsLoading(true);
-            try {
-                await setDoc(doc(db, 'settings', 'config'), { acceptLiveTraffic: newIsLive, environment: newIsLive ? 'live' : 'demo_mode' }, { merge: true });
-                setIsLive(newIsLive);
-            } catch (e) {
-                console.error("Error updating config:", e);
-                alert("Failed to update system mode.");
-            } finally {
-                setIsLoading(false);
-            }
+            setAppMode(newIsLive ? 'LIVE' : 'DEMO');
+            setIsLive(newIsLive);
+            window.location.reload();
         }
     };
-
-    if (isLoading) return <div className="p-4 flex justify-center"><Loader2 className="animate-spin text-blue-500" /></div>;
-    if (!isMaster) return null;
 
     return (
         <div style={{ padding: '20px', border: '2px solid #e5e7eb', borderRadius: '8px', maxWidth: '350px', backgroundColor: '#f9fafb' }}>
             <h3 style={{ marginTop: 0, color: '#111827', fontWeight: 'bold' }}>System Data Mode</h3>
             <p style={{ color: '#4b5563', marginBottom: '15px', fontSize: '14px' }}>
                 Current State: <strong style={{ color: isLive ? '#16a34a' : '#ea580c' }}>
-                    {isLive ? 'LIVE MODE (Accepts incoming Cx data)' : 'DEMO MODE (Blocks incoming Cx data)'}
+                    {isLive ? 'LIVE MODE (Production)' : 'DEMO MODE (Testing)'}
                 </strong>
             </p>
             <button 
                 onClick={handleToggle}
-                disabled={isLoading}
                 style={{
                     backgroundColor: isLive ? '#dc2626' : '#16a34a',
                     color: 'white',

@@ -1,17 +1,17 @@
 import { collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Permit } from '../types';
+import { getTargetCollection, getAppMode } from '../utils/appMode';
 
 // 🚀 REINICIO MAESTRO: Versión 3 (Pizarra 100% limpia)
 const STORAGE_KEY = 'eba_permits_db_v3';
-const COLLECTION_NAME = 'permits_v3';
 
 // 1. Cargamos la memoria del navegador al instante
 const initialData = localStorage.getItem(STORAGE_KEY);
 let localPermitsCache: Permit[] = initialData ? JSON.parse(initialData) : [];
 
 // 2. ESCUCHA EN TIEMPO REAL A FIREBASE
-onSnapshot(collection(db, COLLECTION_NAME), (snapshot) => {
+onSnapshot(collection(db, getTargetCollection()), (snapshot) => {
   const permits: Permit[] = [];
   snapshot.forEach((doc) => {
     permits.push(doc.data() as Permit);
@@ -38,6 +38,9 @@ export const getPermitById = (id: string): Permit | undefined => {
 };
 
 export const savePermit = (permit: Permit): void => {
+  // FORCE ENVIRONMENT TAGGING TO PREVENT CROSS-CONTAMINATION
+  permit.env = getAppMode();
+
   // 1. GUARDADO INSTANTÁNEO LOCAL
   const index = localPermitsCache.findIndex(p => p.id === permit.id);
   if (index >= 0) {
@@ -50,10 +53,10 @@ export const savePermit = (permit: Permit): void => {
   // 2. GUARDADO EN LA NUBE (En segundo plano)
   const cleanPermitForFirebase = JSON.parse(JSON.stringify(permit));
 
-  const permitRef = doc(db, COLLECTION_NAME, permit.id);
+  const permitRef = doc(db, getTargetCollection(), permit.id);
   setDoc(permitRef, cleanPermitForFirebase).catch(err => {
-    console.error("❌ Error guardando en Firebase:", err);
-    alert("Hubo un problema sincronizando con la nube. Revisa tu conexión.");
+    console.error("🔥 Error guardando en Firebase:", err);
+    alert(`Error syncing with Firebase: ${err.message}. Please check your internet connection.`);
   });
 };
 

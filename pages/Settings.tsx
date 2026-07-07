@@ -1,12 +1,13 @@
 // ARCHIVO: src/pages/Settings.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, getDocs, deleteDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, deleteDoc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ArrowLeft, Save, Shield, Users, Building, Plus, Trash2, Loader2, Activity, AlertTriangle, Download, RefreshCw } from 'lucide-react';
 import { getCurrentUserEmail } from '../services/cx';
 import { ModeToggle } from '../components/ModeToggle'; 
 import { AutoSyncToggle } from '../components/AutoSyncToggle';
+import { getTargetCollection } from '../utils/appMode';
 
 interface AppSettings {
   companyName: string;
@@ -39,16 +40,10 @@ export const Settings: React.FC = () => {
   const isMaster = currentUser.includes('master') || currentUser.includes('dietrich') || currentUser.includes('eba-dt');
 
   useEffect(() => {
-    if (!isMaster) {
-      alert("Access Denied: Master Clearance Required.");
-      navigate('/');
-      return;
-    }
-    
     loadSettings();
 
     // 🚀 RADAR RED BARREDERA: Atrapa CUALQUIER tipo de error de CX
-    const unsubscribe = onSnapshot(collection(db, 'permits'), (snapshot) => {
+    const unsubscribe = onSnapshot(collection(db, getTargetCollection()), (snapshot) => {
       const failedList: any[] = [];
       snapshot.forEach(d => {
         const data = d.data();
@@ -108,9 +103,10 @@ export const Settings: React.FC = () => {
     setRetryingIds(prev => new Set(prev).add(permitId));
 
     try {
-      await updateDoc(doc(db, 'permits', permitId), {
+      await updateDoc(doc(db, getTargetCollection(), permitId), {
         sync_status: 'pending',
-        syncStatus: 'pending'
+        syncStatus: 'pending',
+        updatedAt: serverTimestamp()
       });
       // Mensaje silencioso en consola para no molestar tanto en pantalla
       console.log(`[Re-Sync] Triggered for ${permitId}. Background worker starting...`);
@@ -159,7 +155,7 @@ export const Settings: React.FC = () => {
     if (!window.confirm("WARNING: This will permanently delete all malformed and unsupported permits from the database. Proceed?")) return;
     setIsLoading(true);
     try {
-      const snapshot = await getDocs(collection(db, "permits"));
+      const snapshot = await getDocs(collection(db, getTargetCollection()));
       let deletedCount = 0;
       for (const d of snapshot.docs) {
         const data = d.data();
@@ -190,16 +186,18 @@ export const Settings: React.FC = () => {
         <div className="flex justify-between items-center mb-8 border-b-2 border-gray-200 pb-4">
           <div>
             <button onClick={() => navigate('/')} className="text-gray-500 font-bold flex items-center gap-1 mb-2 hover:text-gray-900"><ArrowLeft size={16}/> Back to Dashboard</button>
-            <h1 className="text-3xl font-black text-gray-900 uppercase flex items-center gap-3"><Shield className="text-red-600"/> Master Settings</h1>
+            <h1 className="text-3xl font-black text-gray-900 uppercase flex items-center gap-3"><Shield className="text-red-600"/> {isMaster ? 'Master Settings' : 'Settings'}</h1>
           </div>
-          <div className="flex gap-4">
-            <button onClick={handleGarbageCleanup} className="bg-red-100 hover:bg-red-200 text-red-700 px-6 py-3 rounded-xl font-black uppercase flex items-center gap-2 shadow-sm transition-all border border-red-200">
-              <Trash2 size={18}/> Clean Database
-            </button>
-            <button onClick={handleSave} disabled={isSaving} className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-black uppercase flex items-center gap-2 shadow-lg transition-all">
-              {isSaving ? <Loader2 size={18} className="animate-spin"/> : <Save size={18}/>} Save Changes
-            </button>
-          </div>
+          {isMaster && (
+            <div className="flex gap-4">
+              <button onClick={handleGarbageCleanup} className="bg-red-100 hover:bg-red-200 text-red-700 px-6 py-3 rounded-xl font-black uppercase flex items-center gap-2 shadow-sm transition-all border border-red-200">
+                <Trash2 size={18}/> Clean Database
+              </button>
+              <button onClick={handleSave} disabled={isSaving} className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-black uppercase flex items-center gap-2 shadow-lg transition-all">
+                {isSaving ? <Loader2 size={18} className="animate-spin"/> : <Save size={18}/>} Save Changes
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 gap-8">
@@ -212,12 +210,13 @@ export const Settings: React.FC = () => {
             </div>
             <div className="flex gap-4 flex-col sm:flex-row">
               <ModeToggle />
-              <AutoSyncToggle />
+              {isMaster && <AutoSyncToggle />}
             </div>
           </div>
 
           {/* SYNC FAILURES (DLQ MANUAL FAILSAFE DASHBOARD) */}
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-red-200">
+          {isMaster && (
+            <div className="bg-white p-8 rounded-2xl shadow-sm border border-red-200">
             <div className="flex items-center justify-between border-b pb-4 mb-6">
               <h2 className="text-xl font-bold text-red-700 flex items-center gap-2">
                 <AlertTriangle className="text-red-600"/> Sync Failures (Dead Letter Queue)
@@ -297,9 +296,11 @@ export const Settings: React.FC = () => {
               </div>
             )}
           </div>
+          )}
 
           {/* GENERAL SETTINGS */}
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+          {isMaster && (
+            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
             <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2 border-b pb-2"><Building className="text-blue-600"/> General Platform Settings</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
@@ -321,10 +322,12 @@ export const Settings: React.FC = () => {
                 <p className="text-[10px] text-gray-400 mt-1 uppercase">Overridden by the System Dimension toggle above.</p>
               </div>
             </div>
-          </div>
+            </div>
+          )}
 
           {/* ACCESS CONTROL LIST */}
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+          {isMaster && (
+            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
             <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2 border-b pb-2"><Users className="text-blue-600"/> Access Control List (ACL)</h2>
             
             <div className="flex flex-col md:flex-row gap-4 mb-8 bg-blue-50 p-4 rounded-xl border border-blue-100">
@@ -374,6 +377,7 @@ export const Settings: React.FC = () => {
             </div>
             
           </div>
+          )}
         </div>
 
       </div>

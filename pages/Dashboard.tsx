@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, doc, deleteDoc } from 'firebase/firestore'; 
+import { collection, getDocs, doc, deleteDoc, query, where } from 'firebase/firestore'; 
 import { db } from '../firebase'; 
 import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff } from 'lucide-react'; 
 import { getCurrentUserEmail, getCircuitBreakerRemainingTime } from '../services/cx';
+import { getAppMode, getTargetCollection } from '../utils/appMode';
 
 // 🚀 DICCIONARIO OFICIAL ALINEADO CON iTwoCX
 const permitCategories = [
@@ -44,6 +45,9 @@ export const Dashboard = () => {
   const [savedPermits, setSavedPermits] = useState<any[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // 🚀 NUEVO: Estado Reactivo para el Modo de la App
+  const [appMode, setAppMode] = useState(getAppMode());
+
   const [deleteTarget, setDeleteTarget] = useState<{id: string, num: string} | null>(null);
   const [securityPin, setSecurityPin] = useState('');
   const [pinError, setPinError] = useState('');
@@ -62,7 +66,8 @@ export const Dashboard = () => {
   const loadPermits = async () => {
     setIsSyncing(true);
     try {
-      const querySnapshot = await getDocs(collection(db, 'permits'));
+      const q = query(collection(db, getTargetCollection()), where('env', '==', getAppMode()));
+      const querySnapshot = await getDocs(q);
       const permitsFromCloud: any[] = [];
       querySnapshot.forEach((docSnap) => {
           const data = docSnap.data();
@@ -93,22 +98,25 @@ export const Dashboard = () => {
       setCbTimeLeft(getCircuitBreakerRemainingTime());
     }, 1000);
     const interval = setInterval(loadPermits, 15000); 
+
+    // 🚀 RADAR: Revisa el modo de la app cada medio segundo
+    const modeRadar = setInterval(() => {
+      setAppMode(getAppMode());
+    }, 500);
+
     return () => {
         clearInterval(cbInterval);
         clearInterval(interval);
+        clearInterval(modeRadar);
     };
   }, []);
 
   const handleCategoryClick = (code: string) => {
-    // 🚀 LÓGICA DE ACCESO RESTRINGIDA SEGÚN PLANTILLAS DISPONIBLES
     if (['BG', 'BGP', 'BE'].includes(code)) {
-      // Plantilla de Excavación (Breaking Ground)
       navigate('/new', { state: { permitType: code } });
     } else if (code === 'PUMP') {
-      // Plantilla de Bombeo
       navigate('/new-pump', { state: { permitType: code } });
     } else {
-      // El resto aún no tiene plantilla diseñada
       navigate('/under-construction');
     }
   };
@@ -123,7 +131,7 @@ export const Dashboard = () => {
     if (securityPin !== MASTER_SECURITY_PIN) return setPinError('Invalid Security PIN. Access Denied.');
     if (!deleteTarget) return;
     try {
-      await deleteDoc(doc(db, 'permits', deleteTarget.id)); 
+      await deleteDoc(doc(db, getTargetCollection(), deleteTarget.id)); 
       setSavedPermits(prev => prev.filter(p => p.id !== deleteTarget.id)); 
       setDeleteTarget(null);
       alert(`✅ Permit PF#${deleteTarget.num} was securely and permanently deleted.`);
@@ -143,6 +151,7 @@ export const Dashboard = () => {
   }, [savedPermits]);
 
   const filteredPermits = savedPermits.filter(p => {
+
     const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
     
     if (columnFilters.status.length > 0 && !columnFilters.status.includes(pStatus)) return false;
@@ -174,9 +183,9 @@ export const Dashboard = () => {
     setActiveFilterMenu(null);
   };
 
-  const totalClosed = savedPermits.filter(p => p.status === 'closed').length;
-  const totalDrafts = savedPermits.filter(p => p.isDraft).length;
-  const totalActive = savedPermits.filter(p => !p.isDraft && p.status !== 'closed').length;
+  const totalClosed = filteredPermits.filter(p => p.status === 'closed').length;
+  const totalDrafts = filteredPermits.filter(p => p.isDraft).length;
+  const totalActive = filteredPermits.filter(p => !p.isDraft && p.status !== 'closed').length;
 
   return (
     <div className="min-h-screen bg-gray-50 p-6 relative">
@@ -199,7 +208,6 @@ export const Dashboard = () => {
       )}
 
       <div className="max-w-[1400px] mx-auto space-y-8">
-        
         <div className="flex justify-between items-end">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Work Permits Dashboard</h1>
@@ -237,15 +245,10 @@ export const Dashboard = () => {
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b pb-2 relative">
               <h2 className="text-2xl font-bold text-gray-900">Cloud Synced Permits</h2>
-              
               <div className="relative">
-                <button 
-                  onClick={() => setShowColumnSelector(!showColumnSelector)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 shadow-sm transition-colors"
-                >
+                <button onClick={() => setShowColumnSelector(!showColumnSelector)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 shadow-sm transition-colors">
                     <Columns size={16} /> COLUMNS
                 </button>
-
                 {showColumnSelector && (
                   <div className="absolute right-0 top-12 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
                     <div className="bg-gray-50 p-3 border-b border-gray-200 font-bold text-xs uppercase tracking-wider text-gray-700">Select Columns</div>
@@ -272,21 +275,16 @@ export const Dashboard = () => {
                     {ALL_COLUMNS.filter(c => selectedColumns.includes(c.id)).map(col => {
                       const hasFilter = filterOptions[col.id as keyof typeof filterOptions] !== undefined;
                       const isFilterActive = hasFilter && columnFilters[col.id].length > 0;
-                      
                       return (
                         <th key={col.id} className="p-4 relative group">
                           <div className="flex items-center gap-2">
                             {col.label}
                             {hasFilter && (
-                              <button 
-                                onClick={() => setActiveFilterMenu(activeFilterMenu === col.id ? null : col.id)}
-                                className={`p-1 rounded transition-colors ${isFilterActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-800 hover:bg-gray-200'}`}
-                              >
+                              <button onClick={() => setActiveFilterMenu(activeFilterMenu === col.id ? null : col.id)} className={`p-1 rounded transition-colors ${isFilterActive ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-800 hover:bg-gray-200'}`}>
                                 <Filter size={14} className={isFilterActive ? 'fill-current' : ''} />
                               </button>
                             )}
                           </div>
-
                           {activeFilterMenu === col.id && (
                              <div className="absolute left-4 top-12 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden font-normal normal-case tracking-normal text-gray-900 animate-in fade-in slide-in-from-top-1">
                                 <div className="p-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
@@ -295,12 +293,12 @@ export const Dashboard = () => {
                                 </div>
                                 <div className="max-h-48 overflow-y-auto p-1">
                                    {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
-                                      <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
-                                        {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600"/> : <Square size={16} className="text-gray-300"/>}
-                                        {opt}
-                                        <input type="checkbox" className="hidden" checked={columnFilters[col.id].includes(opt)} onChange={() => toggleFilterOption(col.id, opt)} />
-                                      </label>
-                                    ))}
+                                     <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
+                                       {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600"/> : <Square size={16} className="text-gray-300"/>}
+                                       {opt}
+                                       <input type="checkbox" className="hidden" checked={columnFilters[col.id].includes(opt)} onChange={() => toggleFilterOption(col.id, opt)} />
+                                     </label>
+                                   ))}
                                 </div>
                                 <div className="p-2 border-t border-gray-100 flex gap-2">
                                     <button onClick={() => clearFilter(col.id)} className="flex-1 py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200">Clear</button>
@@ -319,82 +317,37 @@ export const Dashboard = () => {
                         <td colSpan={selectedColumns.length} className="p-12 text-center text-gray-400">
                             <Search size={48} className='mx-auto mb-4 opacity-30 text-gray-300'/>
                             <p className='font-bold uppercase tracking-wider text-gray-500'>No results found</p>
-                            <p className='text-xs mt-1'>Check your column filters.</p>
+                            <p className='text-xs mt-1'>Switch mode or check filters.</p>
                         </td>
                     </tr>
                   ) : (
                     filteredPermits.map((p) => {
                       const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
                       const permitTypeDisplay = p.permitType ? String(p.permitType).toUpperCase() : (p.excavationType ? String(p.excavationType).toUpperCase() : 'BG');
-
                       return (
                         <tr key={p.id} className="hover:bg-gray-50 transition-colors">
-                          
-                          {selectedColumns.includes('reference') && (
-                            <td className="p-4 font-black text-blue-700">{p.itwocxNumber || p.permitNumber || 'DRAFT'}</td>
-                          )}
-                          
-                          {selectedColumns.includes('type') && (
-                            <td className="p-4 font-bold text-gray-700">
-                                <span className="px-2 py-1 bg-slate-100 text-slate-800 border border-slate-200 rounded-md text-[10px] font-black uppercase tracking-wider">
-                                    {permitTypeDisplay}
-                                </span>
-                            </td>
-                          )}
-                          
-                          {selectedColumns.includes('location') && (
-                            <td className="p-4 text-gray-600 font-medium">{p.location || '-'}</td>
-                          )}
-                          
+                          {selectedColumns.includes('reference') && <td className="p-4 font-black text-blue-700">{p.itwocxNumber || p.permitNumber || 'DRAFT'}</td>}
+                          {selectedColumns.includes('type') && <td className="p-4 font-bold text-gray-700"><span className="px-2 py-1 bg-slate-100 text-slate-800 border border-slate-200 rounded-md text-[10px] font-black uppercase tracking-wider">{permitTypeDisplay}</span></td>}
+                          {selectedColumns.includes('location') && <td className="p-4 text-gray-600 font-medium">{p.location || '-'}</td>}
                           {selectedColumns.includes('status') && (
                             <td className="p-4">
                               <div className="flex flex-col gap-1">
-                                <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider text-center ${pStatus === 'CLOSED' ? 'bg-red-100 text-red-800' : (pStatus === 'DRAFT' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>
-                                  {pStatus}
-                                </span>
-                                
-                                {p.syncStatus === 'pending' && (
-                                  <span className="animate-pulse bg-amber-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full flex items-center justify-center gap-1 uppercase">
-                                    <RefreshCw size={8} className="animate-spin" /> Sync Queue
-                                  </span>
-                                )}
-
-                                {p.cxSyncError && (
-                                  <div className="flex items-center gap-1 text-red-600" title={p.cxSyncError}>
-                                    <CloudOff size={10} />
-                                    <span className="text-[7px] font-bold uppercase truncate max-w-[80px]">Sync Error</span>
-                                  </div>
-                                )}
+                                <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider text-center ${pStatus === 'CLOSED' ? 'bg-red-100 text-red-800' : (pStatus === 'DRAFT' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>{pStatus}</span>
+                                {p.syncStatus === 'pending' && <span className="animate-pulse bg-amber-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full flex items-center justify-center gap-1 uppercase"><RefreshCw size={8} className="animate-spin" /> Sync Queue</span>}
+                                {p.cxSyncError && <div className="flex items-center gap-1 text-red-600" title={p.cxSyncError}><CloudOff size={10} /><span className="text-[7px] font-bold uppercase truncate max-w-[80px]">Sync Error</span></div>}
                               </div>
                             </td>
                           )}
-
-                          {selectedColumns.includes('engineer') && (
-                            <td className="p-4 text-xs font-bold text-gray-600">{p.siteEngineerSignature?.name || '-'}</td>
-                          )}
-
-                          {selectedColumns.includes('receiver') && (
-                            <td className="p-4 text-xs font-bold text-gray-600">{p.receiverSignature?.name || '-'}</td>
-                          )}
-
-                          {selectedColumns.includes('issuer') && (
-                            <td className="p-4 text-xs font-bold text-gray-600">{p.issuerSignature?.name || '-'}</td>
-                          )}
-
-                          {selectedColumns.includes('approver') && (
-                            <td className="p-4 text-xs font-bold text-gray-600">{p.approverSignature?.name || '-'}</td>
-                          )}
-
+                          {selectedColumns.includes('engineer') && <td className="p-4 text-xs font-bold text-gray-600">{p.siteEngineerSignature?.name || '-'}</td>}
+                          {selectedColumns.includes('receiver') && <td className="p-4 text-xs font-bold text-gray-600">{p.receiverSignature?.name || '-'}</td>}
+                          {selectedColumns.includes('issuer') && <td className="p-4 text-xs font-bold text-gray-600">{p.issuerSignature?.name || '-'}</td>}
+                          {selectedColumns.includes('approver') && <td className="p-4 text-xs font-bold text-gray-600">{p.approverSignature?.name || '-'}</td>}
                           {selectedColumns.includes('action') && (
                             <td className="p-4 text-center">
                               <div className="flex items-center justify-center gap-2">
-                                <button onClick={() => navigate(permitTypeDisplay === 'PUMP' ? `/pump-permit/${p.id}` : `/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">
-                                  Open
-                                </button>
+                                <button onClick={() => navigate(permitTypeDisplay === 'PUMP' ? `/pump-permit/${p.id}` : `/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">Open</button>
                                 {isSuperAdmin && (
-                                  <button onClick={() => requestDeletion(p.id, p.itwocxNumber || 'DRAFT')} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-colors" title="Secure Delete">
-                                    <Trash2 size={16} />
-                                  </button>
+                                  <button onClick={() => requestDeletion(p.id, p.itwocxNumber || 'DRAFT')} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-colors" title="Secure Delete"><Trash2 size={16} /></button>
                                 )}
                               </div>
                             </td>
@@ -408,25 +361,13 @@ export const Dashboard = () => {
             </div>
           </div>
         </div>
-
         <div className="mt-12">
           <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-2">Permit Action Center</h2>
-          
-          {/* 🚀 GRID CON LÓGICA DE BLOQUEO VISUAL PARA NO-DISPONIBLES */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
             {permitCategories.map((permit) => {
-                // Solo BG, BGP, BE y PUMP están activos
                 const isTemplateAvailable = ['BG', 'BGP', 'BE', 'PUMP'].includes(permit.code);
-                
                 return (
-                  <div 
-                    key={permit.code} 
-                    onClick={() => handleCategoryClick(permit.code)}
-                    className={`bg-white rounded-xl shadow-sm border ${permit.border} p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 
-                      ${isTemplateAvailable 
-                        ? 'hover:shadow-md hover:border-blue-500 hover:ring-1 hover:ring-blue-500' 
-                        : 'opacity-60 grayscale-[0.5] hover:bg-gray-50'}`}
-                  >
+                  <div key={permit.code} onClick={() => handleCategoryClick(permit.code)} className={`bg-white rounded-xl shadow-sm border ${permit.border} p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${isTemplateAvailable ? 'hover:shadow-md hover:border-blue-500 hover:ring-1 hover:ring-blue-500' : 'opacity-60 grayscale-[0.5] hover:bg-gray-50'}`}>
                     <span className={`text-2xl p-3 rounded-full mb-3 ${permit.color}`}>{permit.icon}</span>
                     <h3 className="font-bold text-gray-800 text-xs uppercase tracking-tight">{permit.name}</h3>
                     <div className='flex items-center gap-1 mt-1'>
@@ -438,7 +379,6 @@ export const Dashboard = () => {
             })}
           </div>
         </div>
-
       </div>
     </div>
   );

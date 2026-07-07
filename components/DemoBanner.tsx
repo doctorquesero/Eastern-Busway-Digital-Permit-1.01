@@ -1,12 +1,19 @@
 // src/components/DemoBanner.tsx
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { getAppMode } from '../utils/appMode';
 
 export const DemoBanner: React.FC = () => {
-    const currentMode = getAppMode();
+    const [isDemo, setIsDemo] = useState(getAppMode() !== 'LIVE');
 
-    // Si estamos en LIVE, la barra se vuelve invisible y no estorba
-    if (currentMode === 'LIVE') return null;
+    useEffect(() => {
+        // Radar activo: escanea el estado de la app cada 500ms
+        const interval = setInterval(() => {
+            setIsDemo(getAppMode() !== 'LIVE');
+        }, 500);
+        return () => clearInterval(interval);
+    }, []);
+
+    if (!isDemo) return null;
 
     return (
         <div style={{
