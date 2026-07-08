@@ -1,66 +1,62 @@
-# CAN YOU DIG IT - MASTER CONFIGURATION & KNOWLEDGE BASE
-*(Source of truth for all integrations, architecture, and developer rules)*
+CAN YOU DIG IT - MASTER CONFIGURATION & KNOWLEDGE BASE
 
-## 1. iTwoCX Integration Architecture (The "CX" Sync)
-The connection between *Can You Dig It* and the *iTwoCX* platform is strictly bound to the iTwoCX REST API. All code written by Antigravity MUST adhere to these exact constraints to avoid silent failures or API rejections.
+(Source of truth for all integrations, architecture, and developer rules)
 
-### A. Authentication Flow
-- **Encryption**: Passwords cannot be sent in plain text. They must first be encrypted via `POST /Login/EncryptPassword`.
-- **Session Key**: The encrypted string is then sent to `POST /Login/ByEmail`. The API returns a `SessionKey` (or `Key`) which must be included in the `Key: [SessionKey]` header for all subsequent requests.
+1. iTwoCX Integration Architecture (The "CX" Sync)
 
-### B. The Dead Letter Queue (DLQ) & Webhooks
-- **Async Execution**: Syncing with iTwoCX must never happen directly on the frontend. It is handled by a Firebase Cloud Function (`onPermitWritten`) acting as a background worker.
-- **DLQ**: If a sync fails (due to network timeout or payload rejection), the permit status becomes `failed` and appears in the Master Settings dashboard. The user can manually trigger a retry.
-- **Cooldown**: Frontend manual syncs must have a strict 15-second visual timeout/lock to prevent rate-limiting bans from the iTwoCX firewall.
+The connection between Can You Dig It and the iTwoCX platform is strictly bound to the iTwoCX REST API. All code written by any AI agent MUST adhere to these exact constraints to avoid silent failures or API rejections.
 
-### C. Document Updates & The "Silent Rejection" Trap
-**CRITICAL DEVELOPER RULE:** Never send a "minimal payload" to the `PUT /Document/Update` endpoint. The iTwoCX workflow engine will return a `200 OK` but silently abort the transition, stating `"Document has no changes"` because it requires the full workflow context.
+A. Dynamic Routing & Swagger Adherence
+  - The iTwoCX API strictly requires the Project Code to be injected into the URL path, NOT passed as a query string or header. The official schema is: `/Api/{projectCode}/Endpoint/Method`.
+  - Base URL Constraint: The base constant must be strictly `https://au.itwocx.com/api/25.12`.
+  - Example LIVE Route: `/Api/EB/Document/GetByDocCode...`
+  - Example DEMO Route: `/Api/EB-DEMO/Document/GetByDocCode...`
 
-**The Golden Path for Updates:**
-1. **GET**: Always call `GET /Document/GetByReference` to retrieve the *entire* document JSON object (which includes hidden workflow keys like `DocSettingId`, `Timestamp`, and `FormWorkflowId`).
-2. **CLONE**: Spread the exact response object (`const updatePayload = { ...cxDoc };`).
-3. **MUTATE**: Only alter the specific fields required for the status change.
-4. **PUT**: Send the complete cloned object back to `PUT /Document/Update`.
+B. The "GetByDocCode" Constraint & Pagination
+  - Never use `GetByReference`. The primary document identifier shown as "REF" in the CX UI actually maps to the `DocCode` database field.
+  - Query Parameter: The endpoint strictly expects the query parameter `?code=` (e.g., `?code=PF%2310582`).
+  - Pagination: The `GetByDocCode` endpoint returns a **paged list**, not a direct object. The correct document must always be unpacked from the array: `const cxDoc = cxRawResponse.Items[0];`
 
-### D. Exact Semantics (Status & Action Codes)
-The iTwoCX workflow engine is strictly case-sensitive and uses exact semantic terminology.
-- **To ISSUE a permit:**
-  - `StatusName = "PERMIT ISSUED"`
-  - `ActionCodes = ["ISSUE"]`
-- **To CLOSE a permit:**
-  - `StatusName = "CLOSED"` *(MUST NOT BE "PERMIT CLOSED")*
-  - `ActionCodes = ["CLOSE"]`
+C. Reference Number Sanitization & Zero-Padding
+  - The iTwoCX workflow engine is mathematically strict. Permits must be zero-padded to a minimum of 4 digits and prefixed with the literal string `PF#`.
+  - Example Logic: 
+    `const cleanNumber = String(permitNumber).replace(/\D/g, "");`
+    `const paddedNumber = cleanNumber.padStart(4, "0");`
+    `const exactCXReference = 'PF#' + paddedNumber;`
+  - The hash (`#`) MUST be safely URL-encoded in the query string: `?code=${encodeURIComponent(exactCXReference)}`.
 
-### E. File Attachments (Signed PDFs)
-- PDFs must be downloaded from Firebase Storage into an `ArrayBuffer` and converted to `Base64`.
-- The upload must occur **BEFORE** the document status is changed to CLOSED.
-- Endpoint: `POST /Attachment/Upload?documentId={Id}`
-- Payload structure:
-  ```json
-  {
-      "Name": "PF_0077_Closed.pdf",
-      "ChunkId": 1,
-      "ChunkTotal": 1,
-      "Content": "[Base64_String]"
-  }
-  ```
+D. Document Updates & The "Silent Rejection" Trap
+CRITICAL DEVELOPER RULE: Never send a "minimal payload" to the `PUT /Document/Update` endpoint. The Golden Path for Updates:
+  1. GET: Call `GET /Document/GetByDocCode` to retrieve the entire document (which includes hidden workflow keys).
+  2. CLONE: Deep clone the response object.
+  3. MUTATE: Only alter `StatusName` and `ActionCodes`.
+  4. PUT: Send the complete cloned object back.
 
-## 2. Core Architectural Rules (PermitDetail.tsx)
+E. Exact Semantics (Status & Action Codes)
+  - To ISSUE a permit: `StatusName = "PERMIT ISSUED"` | `ActionCodes = ["ISSUE"]`
+  - To CLOSE a permit: `StatusName = "CLOSED"` | `ActionCodes = ["CLOSE"]`
+  - The backend trigger must strictly evaluate `isDraft === false` or `status === 'active'` to trigger Issuance, and ONLY trigger Closure when explicitly marked as `'closed'`.
 
-### A. Permit Closure Authority Rules
+F. File Attachments (Signed PDFs)
+  - PDFs must be uploaded BEFORE the document status is changed to CLOSED. Once a document is CLOSED in CX, it becomes immutable and attachments will be rejected.
+  - Endpoint: `POST /Api/{projectCode}/Attachment/Upload?documentId={Id}`
+
+2. Core Architectural Rules (PermitDetail.tsx)
+
+A. Permit Closure Authority Rules
 The closure logic follows a strict dual-authority model:
-*   **Normal Closure (Receiver):** If the work is completed or the permit expires without incidents, **only the Receiver** has the authority to execute the closure.
-*   **Safety Closure / Strike (Issuer):** If a "Cease Works" protocol is triggered (e.g., strike, methodology change, etc.), the permit is locked for the Receiver. **Only the Issuer** has the authority to execute the emergency closure ("Cancel / Revoke Permit immediately").
+  - Normal Closure (Receiver): If the work is completed or the permit expires without incidents, only the Receiver has the authority to execute the closure.
+  - Safety Closure / Strike (Issuer): If a "Cease Works" protocol is triggered (e.g., strike, methodology change, etc.), the permit is locked for the Receiver. Only the Issuer has the authority to execute the emergency closure ("Cancel / Revoke Permit immediately").
 
-### B. CX Synchronization Filter (Breaking Ground Family)
-*   The synchronization of closures with iTwoCX (via `cxSyncPending: 'closure'`) **only applies** to the "Breaking Ground" family.
-*   **Authorized Permit Types:** `BG`, `BGP`, `BE`, and `EXCAVATION`.
-*   Other permits close locally in Firebase but do not trigger iTwoCX API calls.
+B. CX Synchronization Filter (Breaking Ground Family)
+  - The synchronization of closures with iTwoCX (via `cxSyncPending: 'closure'`) only applies to the "Breaking Ground" family.
+  - Authorized Permit Types: BG, BGP, BE, and EXCAVATION.
+  - Other permits close locally in Firebase but do not trigger iTwoCX API calls.
 
-### C. Strict PDF Backup Sequence
-*   **Golden Rule:** NEVER set a permit status to `syncStatus: 'pending'` before the PDF backup is finalized.
-*   **Mandatory Sequence:** 1. User confirms closure -> 2. Set status to `closed` locally -> 3. Generate PDF (html2canvas/jsPDF) -> 4. Upload to Firebase Storage and retrieve `pdfBackupUrl` -> 5. Set `syncStatus: 'pending'` and `cxSyncPending: 'closure'` to trigger the backend worker.
+C. Strict PDF Backup Sequence
+  - Golden Rule: NEVER set a permit status to `syncStatus: 'pending'` before the PDF backup is finalized.
+  - Mandatory Sequence: 1. User confirms closure -> 2. Set status to closed locally -> 3. Generate PDF (html2canvas/jsPDF) -> 4. Upload to Firebase Storage and retrieve `pdfBackupUrl` -> 5. Set `syncStatus: 'pending'` and `cxSyncPending: 'closure'` to trigger the backend worker.
 
-### D. Draft State & Issue Validations
-*   **Visual State Integrity:** The status badge "ISSUED / ACTIVE" must rely strictly on the `isDraft` boolean flag (`const isIssued = permit?.isDraft === false && !isClosed;`). Never rely on the database string status, as it defaults to 'active'.
-*   **Issuance Locking:** To issue a permit, it is mandatory that all 5 *Issuer Verification Checks* (Radio buttons: Scanned, Marked, Potholing, Transpower, Watercare) be completed. The issuance function must block execution if any are null or undefined.
+D. Draft State & Issue Validations
+  - Visual State Integrity: The status badge "ISSUED / ACTIVE" must rely strictly on the `isDraft` boolean flag (`const isIssued = permit?.isDraft === false && !isClosed;`). Never rely on the database string `status`, as it defaults to `'active'`.
+  - Issuance Locking: To issue a permit, it is mandatory that all 5 Issuer Verification Checks (Radio buttons: Scanned, Marked, Potholing, Transpower, Watercare) be completed. The issuance function must block execution if any are null or undefined.
