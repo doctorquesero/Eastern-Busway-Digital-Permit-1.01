@@ -191,26 +191,38 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <div className="bg-blue-600 text-white font-bold text-xs p-1 border border-black border-b-0">To be filled in by the permit issuer</div>
                 <div className="bg-blue-500 text-white font-bold text-[10px] p-1 border border-black border-b-0">Approval is subject to the following conditions/procedures/precautions (Isolation of known underground services etc)</div>
                 <table className="w-full text-[10px] border-collapse border border-black mb-4">
+                    <thead>
+                        <tr className="bg-blue-500 text-white">
+                            <th className="border border-black p-1 text-left">Check</th>
+                            <th className="border border-black p-1 w-28">Response</th>
+                            <th className="border border-black p-1 w-40 text-left">Issuer Comment</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         <tr>
                             <td className="border border-black p-1 font-medium">Has the area for this permit been scanned</td>
-                            <td className="border border-black p-1 w-32 font-bold text-right"><YNBox checked={permit.knownServicesScanned === 'yes'} label="Y" /><YNBox checked={permit.knownServicesScanned === 'no'} label="N" /><YNBox checked={permit.knownServicesScanned === 'n/a'} label="N/A" /></td>
+                            <td className="border border-black p-1 font-bold text-right"><YNBox checked={permit.knownServicesScanned === 'yes'} label="Y" /><YNBox checked={permit.knownServicesScanned === 'no'} label="N" /><YNBox checked={permit.knownServicesScanned === 'n/a'} label="N/A" /></td>
+                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.knownServicesScanned || ''}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">Known active services physically marked out on site.</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.servicesMarked === 'yes'} label="Y" /><YNBox checked={permit.servicesMarked === 'no'} label="N" /><YNBox checked={permit.servicesMarked === 'n/a'} label="N/A" /></td>
+                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.servicesMarked || ''}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">If you are potholing have you got depth markers for holes when back filling?</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.potholingMarkers === 'yes'} label="Y" /><YNBox checked={permit.potholingMarkers === 'no'} label="N" /><YNBox checked={permit.potholingMarkers === 'n/a'} label="N/A" /></td>
+                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.potholingMarkers || ''}</td>
                         </tr>
                         <tr>
-                            <td className="border border-black p-1 font-medium">Is the work within the Transpower Designation Area & a S176 is in place?</td>
+                            <td className="border border-black p-1 font-medium">Is the work within the Transpower Designation Area &amp; a S176 is in place?</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.transpowerDesignation === 'yes'} label="Y" /><YNBox checked={permit.transpowerDesignation === 'no'} label="N" /><YNBox checked={permit.transpowerDesignation === 'n/a'} label="N/A" /></td>
+                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.transpowerDesignation || ''}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">Have the works complied with Watercare's "Works Over Approval" form, for distances of 2 meters or less from pipelines &lt;375 mm and 10 meters or less from pipelines ≥375 mm according to the COP?</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.watercareWorksOver === 'yes'} label="Y" /><YNBox checked={permit.watercareWorksOver === 'no'} label="N" /><YNBox checked={permit.watercareWorksOver === 'n/a'} label="N/A" /></td>
+                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.watercareWorksOver || ''}</td>
                         </tr>
                     </tbody>
                 </table>
@@ -321,7 +333,29 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         ))}
                     </tbody>
                 </table>
-                <p className="text-[9px] font-bold text-center border p-2 mb-4 bg-gray-50">NOTE: Any unidentified service found, must be treated as live until confirmed otherwise.</p>
+                <p className="text-[9px] font-bold text-center border p-2 mb-2 bg-gray-50">NOTE: Any unidentified service found, must be treated as live until confirmed otherwise.</p>
+
+                {/* Approver Comments Block */}
+                {permit.approverComments && Object.values(permit.approverComments).some(v => v && v.trim()) && (
+                    <div className="border border-black mb-2">
+                        <div className="bg-blue-600 text-white font-bold text-[9px] p-1">Approver Comments</div>
+                        <table className="w-full text-[9px] border-collapse">
+                            <tbody>
+                                {partBItems.map(item => {
+                                    const comment = permit.approverComments?.[item.id];
+                                    if (!comment || !comment.trim()) return null;
+                                    return (
+                                        <tr key={item.id}>
+                                            <td className="border-b border-black p-1 font-bold w-8 text-center align-top">{item.id}.</td>
+                                            <td className="border-b border-black p-1 whitespace-pre-wrap">{comment}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
                 <EBASignature title="Permit Approver" sig={permit.approverSignature} />
             </Page>
 

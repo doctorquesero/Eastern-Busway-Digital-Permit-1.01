@@ -12,7 +12,6 @@ import { uploadImageToStorage } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
-import { getTargetCollection } from '../utils/appMode';
 
 interface PermitDetailProps { id: string; onBack: () => void; }
 
@@ -84,8 +83,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [outstandingWorks, setOutstandingWorks] = useState(permit?.closureOutstandingWorksDetails || '');
     const [photoCaption, setPhotoCaption] = useState('');
     const [otherNotes, setOtherNotes] = useState(permit?.otherNotes || '');
-    const [approverComments, setApproverComments] = useState<Record<string, string>>(permit?.approverComments || {});
-    const [issuerComments, setIssuerComments] = useState<Record<string, string>>(permit?.issuerComments || {});
     const [ceaseItem, setCeaseItem] = useState<'1' | '2' | '3' | '4' | ''>('');
     const [ceaseAction, setCeaseAction] = useState<'resumed' | 'suspended' | 'cancelled' | ''>('');
     const [ceaseIssuerName, setCeaseIssuerName] = useState('');
@@ -132,8 +129,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const syncToFirebase = async (updatedPermit: Permit) => {
         savePermit(updatedPermit); 
         setPermit(updatedPermit);
-        setDoc(doc(db, getTargetCollection(), updatedPermit.id), updatedPermit, { merge: true }).catch(e => console.error("Firebase background sync:", e));
-        return updatedPermit;
+        setDoc(doc(db, 'permits', updatedPermit.id), updatedPermit, { merge: true }).catch(e => console.error("Firebase background sync:", e));
     };
 
     const updateField = (field: keyof Permit, value: any) => {
@@ -175,7 +171,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
         setIsSubmitting(true);
         try {
-            const updated = { ...permit, isDraft: false, status: 'issued', issuerComments, syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'issue', cxSyncError: null } as any;
+            const updated = { ...permit, isDraft: false, status: 'issued', syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'issue', cxSyncError: null } as any;
             await syncToFirebase(updated);
             
             alert("✅ Permit Saved and sync in the background\n\nTabs 1, 2, and 3 are locked.");
@@ -204,7 +200,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const handleApproverSign = async (sig: Signature) => {
         if (!isApprover) { alert(`🛑 ACTION DENIED:\n\nOnly an official Permit Approver can sign this section.`); return; }
         if (!(permit as any).approverPhoto) { alert("🛑 MANDATORY PHOTO REQUIRED:\n\nYou must upload a photo of your physical site inspection before signing."); return; }
-        syncToFirebase({ ...permit, approverSignature: sig, approverComments } as Permit);
+        syncToFirebase({ ...permit, approverSignature: sig } as Permit);
     };
 
     const handleSaveDailyLog = async () => {
@@ -575,26 +571,16 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 { key: 'transpowerDesignation', label: 'Work within Transpower Designation Area & S176 in place?' }, 
                                 { key: 'watercareWorksOver', label: 'Complied with Watercare\'s "Works Over Approval" form...' } 
                             ].map((q) => (
-                                <div key={q.key} className="flex flex-col p-4 bg-white gap-3">
-                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                        <span className="font-bold text-sm text-gray-800 w-full sm:w-2/3">{q.label} *</span>
-                                        <div className="flex space-x-3 w-full sm:w-1/3 sm:justify-end">
-                                            {(['yes', 'no', 'n/a'] as const).map(opt => (
-                                                <label key={opt} className="flex items-center space-x-1 cursor-pointer">
-                                                    <input type="radio" checked={permit[q.key as keyof Permit] === opt} onChange={() => updateField(q.key as keyof Permit, opt)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} className="h-5 w-5 text-blue-600" />
-                                                    <span className="uppercase text-xs font-black text-gray-600">{opt}</span>
-                                                </label>
-                                            ))}
-                                        </div>
+                                <div key={q.key} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-white gap-3">
+                                    <span className="font-bold text-sm text-gray-800 w-full sm:w-2/3">{q.label} *</span>
+                                    <div className="flex space-x-3 w-full sm:w-1/3 sm:justify-end">
+                                        {(['yes', 'no', 'n/a'] as const).map(opt => (
+                                            <label key={opt} className="flex items-center space-x-1 cursor-pointer">
+                                                <input type="radio" checked={permit[q.key as keyof Permit] === opt} onChange={() => updateField(q.key as keyof Permit, opt)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} className="h-5 w-5 text-blue-600" />
+                                                <span className="uppercase text-xs font-black text-gray-600">{opt}</span>
+                                            </label>
+                                        ))}
                                     </div>
-                                    <textarea
-                                        placeholder="Add comment for this check..."
-                                        className="w-full mt-1 p-2 border border-gray-300 rounded text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm disabled:bg-gray-100 disabled:text-gray-500"
-                                        rows={2}
-                                        value={issuerComments[q.key] || ''}
-                                        onChange={(e) => setIssuerComments(prev => ({ ...prev, [q.key]: e.target.value }))}
-                                        disabled={isIssued || isClosed}
-                                    />
                                 </div>
                             ))}
                         </div>
@@ -633,19 +619,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 
                                 <div className="space-y-4 mb-8">
                                     {partBItems.map(item => (
-                                        <div key={item.id} className="flex flex-col gap-2 border-b border-gray-100 pb-4 last:border-0">
-                                            <div className="flex flex-col md:flex-row gap-4">
-                                                <div className="flex-1"><span className="font-black text-blue-600 mr-2">{item.id}.</span><span className="text-sm font-bold text-gray-800 leading-relaxed">{item.question}</span></div>
-                                                <div className="w-full md:w-40 shrink-0"><select className={inputClass} value={item.answer || ''} onChange={(e) => updateChecklist('partBChecklist', item.id, 'answer', e.target.value)} disabled={hasApproverSigned || isClosed}><option value="">- PENDING -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></select></div>
-                                            </div>
-                                            <textarea
-                                                placeholder="Approver comment for this check..."
-                                                className="w-full mt-1 p-2 border border-gray-300 rounded text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm disabled:bg-gray-100 disabled:text-gray-500"
-                                                rows={2}
-                                                value={approverComments[item.id] || ''}
-                                                onChange={(e) => setApproverComments(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                                disabled={hasApproverSigned || isClosed}
-                                            />
+                                        <div key={item.id} className="flex flex-col md:flex-row gap-4 border-b border-gray-100 pb-4 last:border-0">
+                                            <div className="flex-1"><span className="font-black text-blue-600 mr-2">{item.id}.</span><span className="text-sm font-bold text-gray-800 leading-relaxed">{item.question}</span></div>
+                                            <div className="w-full md:w-40 shrink-0"><select className={inputClass} value={item.answer || ''} onChange={(e) => updateChecklist('partBChecklist', item.id, 'answer', e.target.value)} disabled={hasApproverSigned || isClosed}><option value="">- PENDING -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></select></div>
                                         </div>
                                     ))}
                                 </div>

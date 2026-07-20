@@ -214,7 +214,21 @@ const processPendingPermitSync = async (
         }
         
         const getRes = await fetch(getUrl, getBaseOptions(sessionKey as string, "GET"));
-        const cxRawResponse: any = await safeParseJSON(getRes, `GET for Async ${action}`);
+        
+        // ================================================================
+        // 🛡️ MODIFICACIÓN 1: MANEJO DEL TOKEN EXPIRADO (HTML INSTEAD OF JSON)
+        // ================================================================
+        let cxRawResponse: any;
+        try {
+            cxRawResponse = await safeParseJSON(getRes, `GET for Async ${action}`);
+        } catch (parseError: any) {
+            if (parseError.message.includes("returned HTML")) {
+                console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Deleting cached token.`);
+                await db.collection('settings').doc('cx_auth').delete(); // Purga la llave vieja
+                throw new Error("CX Session Token expired. Cleared auth cache. Please press RETRY SYNC again to generate a new token.");
+            }
+            throw parseError;
+        }
         
         const cxDoc: any = cxRawResponse?.Document || cxRawResponse;
 
@@ -275,6 +289,18 @@ const processPendingPermitSync = async (
             updatePayload.ActionCodes = ["CLOSE"];
         }
         
+        // ================================================================
+        // 📝 MODIFICACIÓN 2: REGISTRO HISTÓRICO DE CX (Inyección de nombre)
+        // ================================================================
+        const userInField = newValue.siteEngineerSignature?.name || newValue.createdBy || 'Unknown User';
+        if (!updatePayload.Comments) {
+            updatePayload.Comments = [];
+        }
+        updatePayload.Comments.push({
+            Comment: `Status changed to ${updatePayload.StatusName} via Can You Dig It App by: ${userInField}`,
+            IsInternal: false
+        });
+
         options.body = JSON.stringify(updatePayload);
 
         const updateRes = await fetch(updateUrl, options);
