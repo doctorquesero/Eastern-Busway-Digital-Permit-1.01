@@ -12,6 +12,7 @@ import { uploadImageToStorage } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { getAuth } from 'firebase/auth';
 
 interface PermitDetailProps { id: string; onBack: () => void; }
 
@@ -39,6 +40,63 @@ const compressImage = (file: File): Promise<string> => {
     });
 };
 
+const loadRemoteImageAsDataUrl = (src: string): Promise<string> => new Promise((resolve, reject) => {
+    if (!src) return reject(new Error('Missing image source'));
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            reject(new Error('Canvas unavailable for PDF image rendering'));
+            return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('Unable to load closure evidence image'));
+    img.src = src;
+});
+
+const appendClosureEvidencePagesToPdf = async (pdf: jsPDF, permit: Permit) => {
+    const evidence = [
+        { title: 'Daily Sign Off Photo', url: permit.dailySignOffUrl },
+        { title: 'Crew Registration Photo', url: permit.crewRegistrationUrl }
+    ];
+
+    for (const item of evidence) {
+        if (!item.url) continue;
+
+        try {
+            const imgData = await loadRemoteImageAsDataUrl(item.url);
+            pdf.addPage();
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const page = pdf.getCurrentPageInfo().pageNumber;
+            pdf.setPage(page);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setFontSize(18);
+            pdf.text(item.title, 15, 20);
+
+            const imgProps = pdf.getImageProperties(imgData);
+            const maxWidth = pageWidth - 30;
+            const maxHeight = pageHeight - 60;
+            let width = imgProps.width;
+            let height = imgProps.height;
+            const ratio = Math.min(maxWidth / width, maxHeight / height);
+            width = width * ratio;
+            height = height * ratio;
+
+            pdf.addImage(imgData, 'PNG', (pageWidth - width) / 2, 30, width, height, undefined, 'FAST');
+        } catch (error) {
+            console.error(`Failed to append closure evidence photo to PDF: ${item.title}`, error);
+        }
+    }
+};
+
 const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [permit, setPermit] = useState<Permit | undefined>(getPermitById(id));
     
@@ -61,10 +119,25 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     }, []);
     
     const sessionRole = getUserRole().toLowerCase();
-    const isMaster = sessionRole.includes('master');
+    const currentUser = getAuth().currentUser as any;
+    const userRoles = Array.isArray(currentUser?.roles) ? currentUser.roles : [];
+    const isMaster = userRoles.some((r: string) => typeof r === 'string' && r.toLowerCase() === 'master') || currentUser?.isMaster === true || sessionRole.includes('master');
     const isApprover = sessionRole.includes('approver') || isMaster;
     const isReceiver = sessionRole.includes('receiver') || isMaster;
     const isIssuerRole = sessionRole.includes('issuer') || isMaster;
+
+    const userEmail = (currentUser?.email || '').toLowerCase().trim();
+    const userName = (currentUser?.displayName || currentUser?.name || '').toLowerCase().trim();
+    const userUid = currentUser?.uid || currentUser?.id || '';
+
+    const permitReceiverName = (permit?.receiver || permit?.receiverName || '').toLowerCase().trim();
+    const permitReceiverEmail = (permit?.receiverEmail || '').toLowerCase().trim();
+    const permitReceiverId = permit?.receiverId || permit?.receiverUid || '';
+    const isDesignatedReceiver = 
+      (userEmail && permitReceiverEmail && userEmail === permitReceiverEmail) ||
+      (userName && permitReceiverName && userName === permitReceiverName) ||
+      (userEmail && permitReceiverName && userEmail.includes(permitReceiverName.replace(/\s+/g, ''))) ||
+      (userUid && permitReceiverId && userUid === permitReceiverId);
 
     const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
     const [dailyRecSig, setDailyRecSig] = useState<Signature | null>(null);
@@ -90,6 +163,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const cameraInputRef = useRef<HTMLInputElement>(null);
     const galleryInputRef = useRef<HTMLInputElement>(null);
     const approverCameraRef = useRef<HTMLInputElement>(null);
+    const dailySignOffUploadRef = useRef<HTMLInputElement>(null);
+    const crewRegistrationUploadRef = useRef<HTMLInputElement>(null);
     const pdfExportRef = useRef<HTMLDivElement>(null);
 
     if (!permit) return <div className="p-12 text-center text-red-600 font-black">Permit Not Found.</div>;
@@ -182,6 +257,20 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         }
     };
 
+    const handleClosureEvidenceUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: 'dailySignOffUrl' | 'crewRegistrationUrl') => {
+        if (isClosed || !e.target.files || e.target.files.length === 0 || !permit) return;
+        if (!isOnline) { alert("🛑 NO INTERNET\n\nYou must be connected to the internet to upload the required closure evidence."); e.target.value = ''; return; }
+
+        try {
+            const file = e.target.files[0];
+            const compressedDataUrl = await compressImage(file);
+            const cloudUrl = await uploadImageToStorage(compressedDataUrl, `${field}_${permit.itwocxNumber || permit.permitNumber || 'permit'}_${Date.now()}.jpg`);
+            await syncToFirebase({ ...permit, [field]: cloudUrl } as Permit);
+        } catch (err) {
+            alert(`Error uploading ${field === 'dailySignOffUrl' ? 'Daily Sign Off' : 'Crew Registration'} evidence. Check internet connection.`);
+        } finally { e.target.value = ''; }
+    };
+
     const handleApproverPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (isClosed || !e.target.files || e.target.files.length === 0 || !permit) return;
         if (!isOnline) { alert("🛑 NO INTERNET\n\nYou must be connected to the internet to upload photos securely to the vault."); e.target.value = ''; return; }
@@ -240,8 +329,10 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         }
         if (!preClosureCheck1 && !preClosureCheck3) errors.push("Closure: Select 'Safe' or 'Outstanding'");
         if (preClosureCheck3 && !outstandingWorks.trim()) errors.push("Closure: Detail outstanding works");
-        if (!isReceiver) errors.push("You do not have 'Receiver' permissions to close this permit.");
-        if (closureReceiverName.trim().toLowerCase() !== currentReceiverName.trim().toLowerCase()) errors.push(`Name must match the active receiver: ${currentReceiverName}`);
+        if (!permit.dailySignOffUrl) errors.push("Daily Sign Off evidence is required before this permit can be closed.");
+        if (!permit.crewRegistrationUrl) errors.push("Crew Registration evidence is required before this permit can be closed.");
+        if (!isMaster && !isDesignatedReceiver) errors.push("You do not have 'Receiver' or 'Master' authorization to close this permit.");
+        if (!isMaster && !isDesignatedReceiver && closureReceiverName.trim().toLowerCase() !== currentReceiverName.trim().toLowerCase()) errors.push(`Name must match the active receiver: ${currentReceiverName}`);
         
         if (errors.length > 0) { alert(`🛑 ERRORS:\n\n${errors.join('\n')}`); return; }
         if (!confirm(`🛑 CRITICAL ACTION:\nYou are about to close this permit and finalize the job. Confirm?`)) return;
@@ -268,6 +359,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     const canvas = await html2canvas(pages[i] as HTMLElement, { scale: 2, useCORS: true, logging: false, backgroundColor: "#ffffff" });
                     pdf.addImage(canvas.toDataURL('image/jpeg', 0.8), 'JPEG', 0, 0, 210, 297);
                 }
+                await appendClosureEvidencePagesToPdf(pdf, updatedPermit);
+
                 const rawNumber = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || "").replace(/\D/g, "");
                 const pdfBase64 = pdf.output('datauristring').split(',')[1];
 
@@ -288,16 +381,26 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         const isBreakingGround = ['BG', 'BGP', 'BE', 'EXCAVATION'].includes(pTypeCheck);
 
         if (isBreakingGround) {
-            updatedPermit = { 
-                ...updatedPermit, 
-                syncStatus: 'pending', 
-                sync_status: 'pending', 
-                cxSyncPending: 'closure', 
-                cxSyncError: null 
+            updatedPermit = {
+                ...updatedPermit,
+                syncStatus: 'pending',
+                sync_status: 'pending',
+                cxSyncPending: 'closure',
+                cxSyncError: null
             } as any;
         }
 
         await syncToFirebase(updatedPermit);
+
+        if (isBreakingGround) {
+            await setDoc(doc(db, 'permits', updatedPermit.id), {
+                ...updatedPermit,
+                syncStatus: 'pending',
+                sync_status: 'pending',
+                cxSyncPending: 'closure',
+                cxSyncError: null
+            }, { merge: true });
+        }
 
         setIsSubmitting(false); 
         alert(`✅ Permit Saved and sync in the background\n\nThe permit has been closed and securely saved to Firebase.`);
@@ -808,6 +911,38 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                         <div className="flex flex-col gap-3 p-3 border rounded-xl hover:bg-gray-50 transition-colors relative"><label className="flex items-start gap-4 cursor-pointer group"><input type="checkbox" checked={preClosureCheck3} onChange={e => { setPreClosureCheck3(e.target.checked); if(e.target.checked) setPreClosureCheck1(false); }} className="mt-1 h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer" /><span className="text-sm font-bold text-gray-800 leading-relaxed">The work has not been completed and the following remains outstanding:</span></label>{preClosureCheck3 && (<textarea className="ml-9 text-sm border-2 border-blue-200 rounded-lg p-3 bg-white focus:ring-2 outline-none animate-in fade-in" rows={3} placeholder="Please detail outstanding works..." value={outstandingWorks} onChange={e => setOutstandingWorks(e.target.value)} />)}</div>
                                     </div>
                                     <div className="border-t-2 border-gray-100 pt-8">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                            <div className="border-2 border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50">
+                                                <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">Daily Sign Off Evidence *</p>
+                                                {permit.dailySignOffUrl ? (
+                                                    <div className="space-y-2">
+                                                        <img src={permit.dailySignOffUrl} alt="Daily sign off evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
+                                                        <button onClick={() => syncToFirebase({ ...permit, dailySignOffUrl: undefined } as Permit)} className="w-full bg-red-100 text-red-700 font-bold text-xs uppercase py-2 rounded-lg hover:bg-red-200">Remove</button>
+                                                    </div>
+                                                ) : (
+                                                    <button onClick={() => dailySignOffUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}>
+                                                        Upload Daily Sign Off
+                                                    </button>
+                                                )}
+                                                <input ref={dailySignOffUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'dailySignOffUrl')} />
+                                            </div>
+
+                                            <div className="border-2 border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50">
+                                                <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">Crew Registration Evidence *</p>
+                                                {permit.crewRegistrationUrl ? (
+                                                    <div className="space-y-2">
+                                                        <img src={permit.crewRegistrationUrl} alt="Crew registration evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
+                                                        <button onClick={() => syncToFirebase({ ...permit, crewRegistrationUrl: undefined } as Permit)} className="w-full bg-red-100 text-red-700 font-bold text-xs uppercase py-2 rounded-lg hover:bg-red-200">Remove</button>
+                                                    </div>
+                                                ) : (
+                                                    <button onClick={() => crewRegistrationUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}>
+                                                        Upload Crew Registration
+                                                    </button>
+                                                )}
+                                                <input ref={crewRegistrationUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'crewRegistrationUrl')} />
+                                            </div>
+                                        </div>
+
                                         <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">Identify to Close (Type Full Name of Active Receiver)</label>
                                         <input type="text" className={inputClass + " mb-6 py-3 text-lg text-center uppercase border-gray-400"} placeholder={currentReceiverName} value={closureReceiverName} onChange={e => setClosureReceiverName(e.target.value)} />
                                         

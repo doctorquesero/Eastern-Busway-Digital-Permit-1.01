@@ -158,14 +158,10 @@ const processPendingPermitSync = async (
             throw new Error("Permit has no iTwoCX Number or reference ID assigned.");
         }
 
-        // ================================================================
-        // 🚀 MATEMÁTICA DE RELLENO (PADDING FIX)
-        // Extraemos los números y rellenamos con ceros hasta 4 dígitos
-        // ej: 82 -> 0082, 605 -> 0605, 10582 -> 10582
-        // ================================================================
-        const cleanNumber = String(permitNumber).replace(/\D/g, "");
+        // Rule 1.C: iTwoCX requires the exact PF# reference format with zero-padding from itwocxNumber only.
+        const cleanNumber = String(newValue.itwocxNumber || '').replace(/\D/g, "");
+        const exactCXReference = 'PF#' + cleanNumber.padStart(4, "0");
         const paddedNumber = cleanNumber.padStart(4, "0");
-        const exactCXReference = `PF#${paddedNumber}`;
 
         const rawType = newValue.permitType || newValue.type || 'unknown';
         const typeConfig = PERMIT_CONFIG[rawType];
@@ -187,7 +183,7 @@ const processPendingPermitSync = async (
             targetProjectCode = isGlobalDemo ? 'EB-DEMO' : 'EB';
         }
         
-        const getUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/GetByReference?reference=${encodeURIComponent(exactCXReference)}`;
+        const getUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/GetByDocCode?code=${encodeURIComponent(exactCXReference)}`;
         
         let sessionKey = await getGlobalCXSession(targetProjectCode);
         
@@ -230,9 +226,9 @@ const processPendingPermitSync = async (
             throw parseError;
         }
         
-        const cxDoc: any = cxRawResponse?.Document || cxRawResponse;
+        const cxDoc: any = cxRawResponse?.Items?.[0] || cxRawResponse?.Document || cxRawResponse;
 
-        const permitRef = targetProjectCode === 'EB-DEMO' ? `EB-DEMO-PF-${paddedNumber}` : `EB-PF-${paddedNumber}`;
+        const permitRef = `PF#${paddedNumber}`;
 
         if (!cxDoc || !cxDoc.Id) {
             throw new Error(`Invalid document received from CX for ${permitRef}. The document may not exist, or the reference format is incorrect.`);
@@ -278,7 +274,7 @@ const processPendingPermitSync = async (
 
         const updateUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/Update`;
         const options: any = getBaseOptions(sessionKey as string, "PUT");
-        
+
         const updatePayload: any = JSON.parse(JSON.stringify(cxDoc));
 
         if (action === 'Issuance') {
@@ -288,18 +284,6 @@ const processPendingPermitSync = async (
             updatePayload.StatusName = "CLOSED";
             updatePayload.ActionCodes = ["CLOSE"];
         }
-        
-        // ================================================================
-        // 📝 MODIFICACIÓN 2: REGISTRO HISTÓRICO DE CX (Inyección de nombre)
-        // ================================================================
-        const userInField = newValue.siteEngineerSignature?.name || newValue.createdBy || 'Unknown User';
-        if (!updatePayload.Comments) {
-            updatePayload.Comments = [];
-        }
-        updatePayload.Comments.push({
-            Comment: `Status changed to ${updatePayload.StatusName} via Can You Dig It App by: ${userInField}`,
-            IsInternal: false
-        });
 
         options.body = JSON.stringify(updatePayload);
 
@@ -331,7 +315,7 @@ const processPendingPermitSync = async (
 
         const errorCleanNumber = String(newValue.itwocxNumber || newValue.permitNumber || '').replace(/\D/g, "");
         const errorPadded = errorCleanNumber ? errorCleanNumber.padStart(4, "0") : 'UNKNOWN';
-        const permitRef = targetProjectCode === 'EB-DEMO' ? `EB-DEMO-PF-${errorPadded}` : `EB-PF-${errorPadded}`;
+        const permitRef = `PF#${errorPadded}`;
         
         const isPendingRetry = newValue.syncStatus === 'pending' || newValue.sync_status === 'pending';
         
@@ -425,7 +409,7 @@ const processPendingPermitSync = async (
 
         const notifCleanNumber = String(newValue.itwocxNumber || newValue.permitNumber || '').replace(/\D/g, "");
         const notifPadded = notifCleanNumber ? notifCleanNumber.padStart(4, "0") : 'UNKNOWN';
-        const permitRef = targetProjectCode === 'EB-DEMO' ? `EB-DEMO-PF-${notifPadded}` : `EB-PF-${notifPadded}`;
+        const permitRef = `PF#${notifPadded}`;
 
         const transporter = nodemailer.createTransport({
             service: 'gmail',

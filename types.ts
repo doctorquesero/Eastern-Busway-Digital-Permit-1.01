@@ -154,6 +154,8 @@ export interface Permit {
     closureChecklistAsBuiltReturned?: boolean;
     closureChecklistOutstandingWorks?: boolean;
     closureOutstandingWorksDetails?: string;
+    dailySignOffUrl?: string;
+    crewRegistrationUrl?: string;
 
     // Pump Permit Specific Fields
     projectName?: string;

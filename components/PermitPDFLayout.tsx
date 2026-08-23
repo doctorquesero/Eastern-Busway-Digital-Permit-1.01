@@ -596,13 +596,33 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
             </Page>
 
             {/* === PÁGINAS ADICIONALES: FOTOS (2 por página) === */}
+            {(permit.dailySignOffUrl || permit.crewRegistrationUrl) && (
+                <Page pageNum={13}>
+                    <h2 className="text-xl font-bold text-blue-800 mb-6 uppercase border-b-2 border-gray-300 pb-2">Closure Evidence</h2>
+                    <div className="flex flex-col gap-8 h-full">
+                        {permit.dailySignOffUrl && (
+                            <div className="border-2 border-black p-2 text-center rounded bg-gray-50 flex-1 flex flex-col">
+                                <p className="font-black text-[12px] uppercase bg-white p-2 border border-black mb-2 shrink-0">Daily Sign Off Photo</p>
+                                <img crossOrigin="anonymous" src={permit.dailySignOffUrl} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '300px' }} alt="Daily Sign Off" />
+                            </div>
+                        )}
+                        {permit.crewRegistrationUrl && (
+                            <div className="border-2 border-black p-2 text-center rounded bg-gray-50 flex-1 flex flex-col">
+                                <p className="font-black text-[12px] uppercase bg-white p-2 border border-black mb-2 shrink-0">Crew Registration Photo</p>
+                                <img crossOrigin="anonymous" src={permit.crewRegistrationUrl} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '300px' }} alt="Crew Registration" />
+                            </div>
+                        )}
+                    </div>
+                </Page>
+            )}
+
             {photoPages.map((photoPair, index) => (
-                <Page key={`photo-page-${index}`} pageNum={`13.${index + 1}`}>
+                <Page key={`photo-page-${index}`} pageNum={permit.dailySignOffUrl || permit.crewRegistrationUrl ? `14.${index + 1}` : `13.${index + 1}`}>
                     <h2 className="text-xl font-bold text-blue-800 mb-6 uppercase border-b-2 border-gray-300 pb-2">Photographic Evidence - Part {index + 1}</h2>
                     <div className="flex flex-col gap-8 h-full">
                         {photoPair.map(p => (
                             <div key={p.id} className="border-2 border-black p-2 text-center rounded bg-gray-50 flex-1 flex flex-col">
-                                <img src={p.url} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '400px' }} alt="evidence" />
+                                <img crossOrigin="anonymous" src={p.url} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '400px' }} alt="evidence" />
                                 <p className="font-black text-[12px] uppercase bg-white p-2 border border-black shrink-0">{p.caption}</p>
                             </div>
                         ))}

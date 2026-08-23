@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { getAuth } from 'firebase/auth';
 import { Eraser, Check, Type, PenTool } from 'lucide-react';
 import { Signature, SignatureType } from '../types';
 
@@ -24,6 +25,14 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
         setHasSignature(true);
     }
   }, [initialValue]);
+
+  useEffect(() => {
+    const currentUser = getAuth().currentUser as any;
+    const loggedInName = currentUser?.displayName || currentUser?.name || currentUser?.email || '';
+    if (loggedInName && !initialValue && !hasSignature && !externalName) {
+      setSignerName(loggedInName);
+    }
+  }, [initialValue, externalName, hasSignature]);
 
   // Sync with external name if provided and not yet signed
   useEffect(() => {
@@ -132,6 +141,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
 
   // High contrast white background for inputs
   const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition-shadow font-medium";
+  const nameLocked = Boolean(signerName) || Boolean(externalName) || readOnly;
 
   return (
     <div className="border rounded-lg p-4 bg-white shadow-sm">
@@ -183,9 +193,11 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
                  <input
                     type="text"
                     value={signerName}
-                    onChange={(e) => setSignerName(e.target.value)}
+                    onChange={(e) => !nameLocked && setSignerName(e.target.value)}
                     placeholder="Enter Full Name (Required)"
                     className={inputClass}
+                    readOnly={nameLocked}
+                    disabled={nameLocked}
                 />
              </div>
 
@@ -195,6 +207,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
                 width={300}
                 height={150}
                 className="border border-gray-300 rounded w-full touch-none bg-white cursor-crosshair"
+                style={{ touchAction: 'none' }}
                 onMouseDown={startDrawing}
                 onMouseMove={draw}
                 onMouseUp={stopDrawing}
