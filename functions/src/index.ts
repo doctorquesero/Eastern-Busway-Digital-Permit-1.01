@@ -11,7 +11,7 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 
-const CX_API_BASE = "https://au.itwocx.com/api/25.12";
+const CX_API_BASE = "https://au.itwocx.com/api/26.08";
 
 // ============================================================================
 // 📊 PERMIT TYPE CONFIG TABLE (CX Dictionary)
@@ -52,7 +52,7 @@ const getGlobalCXSession = async (projectCode: string) => {
                 return data.session_key;
             }
         }
-        return null;
+        return process.env.CX_MASTER_TOKEN || process.env.VITE_CX_MASTER_TOKEN || null;
     } catch (err) {
         return null;
     }
@@ -64,13 +64,18 @@ const getBaseOptions = (sessionKey: string, method: string = "GET") => {
         "Accept": "application/json"
     };
     if (sessionKey) {
-        headers["Key"] = sessionKey;
+        headers["UserToken"] = sessionKey;
+        headers["Authorization"] = `Bearer ${sessionKey}`;
     }
     return { method, headers };
 };
 
 const safeParseJSON = async (response: Response, step: string) => {
     const text = await response.text();
+    const trimmedText = text.trim().toLowerCase();
+    if (response.status === 403 || trimmedText.startsWith('<html') || trimmedText.startsWith('<!doctype html')) {
+        throw new Error('Session Token expired/rejected (403 HTML).');
+    }
     try {
         return JSON.parse(text);
     } catch (error) {
@@ -78,69 +83,73 @@ const safeParseJSON = async (response: Response, step: string) => {
     }
 };
 
+const cacheCXSession = async (projectCode: string, sessionKey: string) => {
+    const authPayload: any = { updatedAt: new Date().toISOString() };
+    if (projectCode.toUpperCase().includes('DEMO')) {
+        authPayload.demo_session_key = sessionKey;
+    } else {
+        authPayload.session_key = sessionKey;
+    }
+    await db.collection('settings').doc('cx_auth').set(authPayload, { merge: true });
+};
+
+const clearCXSession = async () => {
+    await db.collection('settings').doc('cx_auth').delete();
+};
+
 export const performCXLogin = async (email?: string, password?: string): Promise<any> => {
     const targetEmail = email || process.env.CX_MASTER_EMAIL;
     const targetPassword = password || process.env.CX_MASTER_PASSWORD;
+    const configuredToken = process.env.CX_MASTER_TOKEN || process.env.VITE_CX_MASTER_TOKEN;
 
-    if (!targetEmail || !targetPassword) {
-        throw new Error("Missing email or password for CX login.");
+    if (targetEmail && targetPassword) {
+        const loginRes = await fetch(`${CX_API_BASE}/Api/Login/ByEmail`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ Email: targetEmail, Password: targetPassword })
+        });
+        const loginData = await safeParseJSON(loginRes, 'v26.08 Login');
+        const sessionKey = loginData?.SessionKey || loginData?.sessionKey || loginData?.AccessToken || loginData?.accessToken || loginData?.Token || loginData?.token || loginData?.Key || loginData?.key;
+        if (loginRes.ok && sessionKey) return { ...loginData, Key: sessionKey };
+        const errors = loginData?.ErrorMessages?.join(', ') || loginData?.Message || `HTTP ${loginRes.status}`;
+        throw new Error(`iTwoCX v26.08 login rejected: ${errors}`);
     }
 
-    let encryptedString = "";
-    try {
-        const encryptRes = await fetch(`${CX_API_BASE}/Api/Login/EncryptPassword`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ Password: targetPassword })
-        });
-        const rawRes = await encryptRes.text();
-        if (!encryptRes.ok) throw new Error(`HTTP ${encryptRes.status}: ${rawRes.substring(0, 150)}`);
-        encryptedString = rawRes.replace(/^"|"$/g, '');
-    } catch (e: any) { throw new Error(`Step 1 Failed: ${e.message}`); }
+    if (configuredToken) return { IsSuccess: true, Key: configuredToken };
+    throw new Error('Missing CX_MASTER_TOKEN or CX_MASTER_EMAIL/CX_MASTER_PASSWORD for iTwoCX v26.08 authentication.');
+};
 
-    let loginRes: Response;
-    try {
-        loginRes = await fetch(`${CX_API_BASE}/Api/Login/ByEmail`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ Email: targetEmail, EncryptedPassword: encryptedString })
-        });
-        const rawLogin = await loginRes.text();
-        
-        let jsonRes;
-        try { jsonRes = JSON.parse(rawLogin); }
-        catch (e) { throw new Error(`iTwoCX returned HTML on Login. Wait 30s. Fragment: ${rawLogin.substring(0,100)}...`); }
-
-        if (!loginRes.ok) {
-            const errs = jsonRes.ErrorMessages?.join(', ') || jsonRes.Message || "Unknown login error";
-            throw new Error(`CX Login Rejected: ${errs}`);
-        }
-        
-        return jsonRes;
-    } catch (e: any) { throw new Error(`Step 2 Failed: ${e.message}`); }
+const refreshCXSession = async (projectCode: string) => {
+    const loginData = await performCXLogin();
+    const sessionKey = loginData?.SessionKey || loginData?.sessionKey || loginData?.AccessToken || loginData?.accessToken || loginData?.Token || loginData?.token || loginData?.Key || loginData?.key;
+    if (!sessionKey) throw new Error('Authentication failure: v26.08 login returned no session token.');
+    await cacheCXSession(projectCode, sessionKey);
+    return sessionKey as string;
 };
 
 // ============================================================================
 // ASYNC PERMIT SYNC WORKER
 // ============================================================================
 const processPendingPermitSync = async (
-    permitId: string, 
-    newValue: any, 
-    previousValue: any, 
+    permitId: string,
+    newValue: any,
+    previousValue: any,
     collectionName: string
 ) => {
     // 🛡️ REGLAS DE DESPERTADOR AMPLIADAS
     const isNowIssued = (newValue.isDraft === false && previousValue.isDraft !== false) ||
-                        (newValue.status === 'active' && previousValue.status !== 'active') ||
-                        (newValue.status === 'issued' && previousValue.status !== 'issued') ||
-                        (newValue.status === 'pending_approval' && previousValue.status !== 'pending_approval');
+        (newValue.status === 'active' && previousValue.status !== 'active') ||
+        (newValue.status === 'issued' && previousValue.status !== 'issued') ||
+        (newValue.status === 'pending_approval' && previousValue.status !== 'pending_approval');
 
     const isNowClosed = (newValue.status === 'closed' && previousValue.status !== 'closed') ||
-                        (newValue.cxSyncPending === 'closure' && previousValue.cxSyncPending !== 'closure');
+        (newValue.cxSyncPending === 'closure' && previousValue.cxSyncPending !== 'closure');
 
     const isPendingRetry = newValue.syncStatus === 'pending' || newValue.sync_status === 'pending';
-    
+
     if (!isNowIssued && !isNowClosed && !isPendingRetry) {
         console.log(`[CX Sync] 🛑 Sleep mode for ${permitId}. No valid CX trigger found.`);
-        return; 
+        return;
     }
 
     let action = 'Issuance';
@@ -150,22 +159,22 @@ const processPendingPermitSync = async (
         action = 'Issuance';
     }
 
-    let targetProjectCode = 'EB-DEMO'; 
-    
+    let targetProjectCode = 'EB-DEMO';
+
     try {
         const permitNumber = newValue.itwocxNumber || newValue.permitNumber;
         if (!permitNumber) {
             throw new Error("Permit has no iTwoCX Number or reference ID assigned.");
         }
 
-        // Rule 1.C: iTwoCX requires the exact PF# reference format with zero-padding from itwocxNumber only.
-        const cleanNumber = String(newValue.itwocxNumber || '').replace(/\D/g, "");
-        const exactCXReference = 'PF#' + cleanNumber.padStart(4, "0");
+        // Rule 1.C: the project code belongs only in the URL path; the query value is PF# plus digits.
+        const cleanNumber = String(permitNumber).replace(/\D/g, "");
         const paddedNumber = cleanNumber.padStart(4, "0");
+        const exactCXReference = 'PF#' + paddedNumber;
 
         const rawType = newValue.permitType || newValue.type || 'unknown';
         const typeConfig = PERMIT_CONFIG[rawType];
-        
+
         if (!typeConfig || !typeConfig.allowed) {
             console.log(`[CX Sync] Skipping ${permitId} - Type '${rawType}' is not mapped for CX integration.`);
             return;
@@ -173,7 +182,7 @@ const processPendingPermitSync = async (
 
         const settingsDoc = await db.collection('settings').doc('config').get();
         const configData = settingsDoc.data();
-        
+
         if (newValue.env === 'LIVE' || newValue.env === 'live') {
             targetProjectCode = 'EB';
         } else if (newValue.env === 'DEMO' || newValue.env === 'demo' || newValue.environment === 'demo') {
@@ -182,56 +191,73 @@ const processPendingPermitSync = async (
             const isGlobalDemo = configData?.environment === 'demo_mode' || configData?.acceptLiveTraffic === false;
             targetProjectCode = isGlobalDemo ? 'EB-DEMO' : 'EB';
         }
-        
-        const getUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/GetByDocCode?code=${encodeURIComponent(exactCXReference)}`;
-        
+
+        const getUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/GetByDocCode?code=${encodeURIComponent('PF#' + paddedNumber)}`;
+
         let sessionKey = await getGlobalCXSession(targetProjectCode);
-        
+
         if (!sessionKey) {
             console.log(`[CX Sync] Session Key missing. Performing background login for ${targetProjectCode}...`);
-            const loginData = await performCXLogin();
-            
-            const extractedKey = loginData?.SessionKey || loginData?.Key || loginData?.sessionKey || loginData?.key;
-            
-            if (extractedKey) {
-                sessionKey = extractedKey;
-                
-                const authPayload: any = { updatedAt: new Date().toISOString() };
-                if (targetProjectCode.includes('DEMO')) {
-                    authPayload.demo_session_key = sessionKey;
-                } else {
-                    authPayload.session_key = sessionKey;
-                }
-                
-                await db.collection('settings').doc('cx_auth').set(authPayload, { merge: true });
-            } else {
-                throw new Error(`Authentication failure: Could not map session key.`);
-            }
+            sessionKey = await refreshCXSession(targetProjectCode);
         }
-        
-        const getRes = await fetch(getUrl, getBaseOptions(sessionKey as string, "GET"));
-        
-        // ================================================================
-        // 🛡️ MODIFICACIÓN 1: MANEJO DEL TOKEN EXPIRADO (HTML INSTEAD OF JSON)
-        // ================================================================
+
         let cxRawResponse: any;
-        try {
-            cxRawResponse = await safeParseJSON(getRes, `GET for Async ${action}`);
-        } catch (parseError: any) {
-            if (parseError.message.includes("returned HTML")) {
-                console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Deleting cached token.`);
-                await db.collection('settings').doc('cx_auth').delete(); // Purga la llave vieja
-                throw new Error("CX Session Token expired. Cleared auth cache. Please press RETRY SYNC again to generate a new token.");
+        let refreshedAfterExpiry = false;
+        for (let getAttempt = 0; getAttempt < 2; getAttempt++) {
+            const getRes = await fetch(getUrl, getBaseOptions(sessionKey as string, "GET"));
+            const responseText = await getRes.text();
+            const trimmedResponse = responseText.trim().toLowerCase();
+            const isHtmlResponse = trimmedResponse.startsWith('<html') || trimmedResponse.startsWith('<!doctype html');
+            const isRejectedResponse = getRes.status === 403 || isHtmlResponse;
+            if (isRejectedResponse) {
+                if (!refreshedAfterExpiry) {
+                    console.warn(`[CX Sync] Session token rejected for ${targetProjectCode}. Refreshing and retrying GET once.`);
+                    await clearCXSession();
+                    sessionKey = await refreshCXSession(targetProjectCode);
+                    refreshedAfterExpiry = true;
+                    continue;
+                }
+                throw new Error('Session Token expired/rejected (403 HTML).');
             }
-            throw parseError;
+            let parsedResponse: any;
+            try {
+                parsedResponse = JSON.parse(responseText);
+            } catch (parseError) {
+                const looksExpired = getRes.status === 401 || /expired|unauthorized|invalid token|session/i.test(responseText);
+                if (!refreshedAfterExpiry && looksExpired) {
+                    console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Refreshing and retrying GET once.`);
+                    await clearCXSession();
+                    sessionKey = await refreshCXSession(targetProjectCode);
+                    refreshedAfterExpiry = true;
+                    continue;
+                }
+                throw new Error(`[GET for Async ${action}] iTwoCX returned non-JSON response (${getRes.status}). Fragment: ${responseText.substring(0, 100)}...`);
+            }
+
+            const responseMessage = JSON.stringify(parsedResponse);
+            const looksExpired = getRes.status === 401 || /expired|unauthorized|invalid token|session/i.test(responseMessage);
+            if (!refreshedAfterExpiry && looksExpired) {
+                console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Refreshing and retrying GET once.`);
+                await clearCXSession();
+                sessionKey = await refreshCXSession(targetProjectCode);
+                refreshedAfterExpiry = true;
+                continue;
+            }
+
+            if (!getRes.ok) {
+                throw new Error(`GET for Async ${action} failed with HTTP ${getRes.status}: ${responseText.substring(0, 200)}`);
+            }
+            cxRawResponse = parsedResponse;
+            break;
         }
-        
-        const cxDoc: any = cxRawResponse?.Items?.[0] || cxRawResponse?.Document || cxRawResponse;
+
+        // GetByDocCode returns a paged response; only its first item is the document model.
+        const cxDoc: any = Array.isArray(cxRawResponse?.Items) ? cxRawResponse.Items[0] : undefined;
 
         const permitRef = `PF#${paddedNumber}`;
 
-        if (!cxDoc || !cxDoc.Id) {
-            throw new Error(`Invalid document received from CX for ${permitRef}. The document may not exist, or the reference format is incorrect.`);
+        if (!cxDoc || typeof cxDoc !== 'object') {
+            throw new Error(`GET SUCCESS but 0 ITEMS FOUND. Searched URL: /Api/${targetProjectCode}/Document/GetByDocCode?code=${encodeURIComponent(exactCXReference)}`);
         }
 
         console.log(`[SONAR] CX DOC DATA FOR ${permitRef} [TYPE: ${rawType}]:`, JSON.stringify({
@@ -248,20 +274,20 @@ const processPendingPermitSync = async (
                 const base64Pdf = Buffer.from(arrayBuffer).toString('base64');
 
                 const uploadUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Attachment/Upload?documentId=${cxDoc.Id}`;
-                
+
                 const uploadPayload = {
                     Name: `${typeConfig.pdfPrefix}_${paddedNumber}_Closed.pdf`,
                     ChunkId: 1,
                     ChunkTotal: 1,
                     Content: base64Pdf
                 };
-                
+
                 const uploadOptions: any = getBaseOptions(sessionKey as string, "POST");
                 uploadOptions.body = JSON.stringify(uploadPayload);
-                
+
                 const uploadRes = await fetch(uploadUrl, uploadOptions);
                 const uploadData = await safeParseJSON(uploadRes, `POST Attachment`);
-                
+
                 if (uploadData && uploadData.IsSuccess === false) {
                     console.warn(`[DLQ] CX Attachment Upload Warning:`, uploadData.ErrorMessages);
                 } else {
@@ -302,89 +328,22 @@ const processPendingPermitSync = async (
         console.log(`[CX Sync] ✅ Successfully executed ${action} for ${permitRef}`);
 
     } catch (error: any) {
-        console.error(`[CX Sync] ❌ Failed to execute async ${action} for ${permitId}:`, error);
-        
-        const errorMessage = error.message || String(error);
-        
+        const nativeError = error.response?.data ? JSON.stringify(error.response.data) : error.message;
+        const errorString = `CX API Error: ${nativeError}`;
+
         await db.collection(collectionName).doc(permitId).update({
             syncStatus: 'failed',
-            sync_status: 'failed',
-            cxSyncError: errorMessage,
-            sync_error: errorMessage
+            cxSyncError: errorString,
+            sync_error: errorString
         });
 
-        const errorCleanNumber = String(newValue.itwocxNumber || newValue.permitNumber || '').replace(/\D/g, "");
-        const errorPadded = errorCleanNumber ? errorCleanNumber.padStart(4, "0") : 'UNKNOWN';
-        const permitRef = `PF#${errorPadded}`;
-        
-        const isPendingRetry = newValue.syncStatus === 'pending' || newValue.sync_status === 'pending';
-        
-        if (!isPendingRetry) {
-            const userInField = newValue.siteEngineerSignature?.name || newValue.createdBy || 'Unknown User';
-            
-            const transporter = nodemailer.createTransport({
-                service: 'gmail',
-                auth: { user: 'EBApermits@gmail.com', pass: 'iuxn tjhm cixw byas' }
-            });
-
-            const mailAttachments: any[] = [];
-            if (newValue.pdfBackupUrl) {
-                mailAttachments.push({
-                    filename: `Backup_${permitRef}.pdf`,
-                    path: newValue.pdfBackupUrl,
-                    contentType: 'application/pdf'
-                });
-            }
-
-            const ALERT_EMAILS = 'dietrich.is.coding@gmail.com, dietrich.is.coding@gmail.com';
-            
-            const mailOptions = {
-                from: '"Can You Dig It - Alerts" <EBApermits@gmail.com>',
-                to: ALERT_EMAILS,
-                subject: `🚨 ❌ CX SYNC FAILURE - ${permitRef}`,
-                html: `
-                    <div style="font-family: 'Segoe UI', Arial, sans-serif; padding: 24px; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;">
-                        <div style="background: #fee2e2; border-radius: 8px; padding: 16px; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; border: 1px solid #fca5a5;">
-                            <span style="font-size: 24px;">🚨</span>
-                            <h2 style="color: #b91c1c; margin: 0; font-size: 20px;">iTwoCX Background Sync Failed</h2>
-                        </div>
-                        <p style="font-size: 15px; color: #374151; line-height: 1.6; margin-bottom: 20px;">
-                            The background worker encountered a critical error while attempting to push a permit state change to the iTwoCX workflow engine.
-                        </p>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px; background: #f9fafb; border-radius: 8px; overflow: hidden; border: 1px solid #f3f4f6;">
-                            <tr>
-                                <td style="padding: 12px; font-weight: bold; color: #4b5563; border-bottom: 1px solid #e5e7eb; width: 140px;">Permit Ref</td>
-                                <td style="padding: 12px; color: #111827; border-bottom: 1px solid #e5e7eb; font-weight: bold;">${permitRef}</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 8px 12px; font-weight: bold; color: #374151; border-bottom: 1px solid #f3f4f6;">Failed Action</td>
-                                <td style="padding: 8px 12px; color: #111827; border-bottom: 1px solid #f3f4f6;">${action}</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 8px 12px; font-weight: bold; color: #374151; border-bottom: 1px solid #f3f4f6;">User in Field</td>
-                                <td style="padding: 8px 12px; color: #111827; border-bottom: 1px solid #f3f4f6;">${userInField || 'Not recorded'}</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 8px 12px; font-weight: bold; color: #374151; border-bottom: 1px solid #f3f4f6;">Project Code</td>
-                                <td style="padding: 8px 12px; color: #111827; border-bottom: 1px solid #f3f4f6;">${targetProjectCode}</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 8px 12px; font-weight: bold; color: #dc2626;">Error Details</td>
-                                <td style="padding: 8px 12px; color: #dc2626; font-family: monospace; font-size: 13px;">${errorMessage}</td>
-                            </tr>
-                        </table>
-                    </div>
-                `,
-                attachments: mailAttachments
-            };
-            try { await transporter.sendMail(mailOptions); } catch (e) {}
-        }
+        throw new Error(errorString);
     }
 
     const isNewlyIssuedNotif = (newValue.isDraft === false && previousValue.isDraft !== false) ||
-                               (newValue.status === 'active' && previousValue.status !== 'active') ||
-                               (newValue.status === 'pending_approval' && previousValue.status !== 'pending_approval');
-                               
+        (newValue.status === 'active' && previousValue.status !== 'active') ||
+        (newValue.status === 'pending_approval' && previousValue.status !== 'pending_approval');
+
     const isMechanical = newValue.excavationType === 'mechanical';
     const needsApprover = !newValue.approverSignature?.data;
 
@@ -448,7 +407,7 @@ const processPendingPermitSync = async (
                 </div>
             `
         };
-        try { await transporter.sendMail(notifyOptions); } catch (error) {}
+        try { await transporter.sendMail(notifyOptions); } catch (error) { }
     }
 };
 

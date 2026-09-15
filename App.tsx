@@ -6,11 +6,11 @@ import PermitDetail from './pages/PermitDetail';
 import NewPumpPermit from './pages/NewPumpPermit';
 import PumpPermitDetail from './pages/PumpPermitDetail';
 import { UnderConstruction } from './pages/UnderConstruction';
-import { Settings as SettingsPage } from './pages/Settings'; 
+import { Settings as SettingsPage } from './pages/Settings';
 import { logoutCX, getUserRole, getCurrentUserEmail, getActiveSessionKey } from './services/cx';
-import { LoginModal } from './components/LoginModal'; 
-import { DemoBanner } from './components/DemoBanner'; 
-import { LogOut, Loader2, Settings as SettingsIcon } from 'lucide-react'; 
+import { LoginModal } from './components/LoginModal';
+import { DemoBanner } from './components/DemoBanner';
+import { LogOut, Loader2, Settings as SettingsIcon } from 'lucide-react';
 import ebLogo from './assets/eb-logo.png';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
@@ -32,7 +32,7 @@ const PumpPermitDetailContainer = () => {
 const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, userEmail: string, handleLogout: () => void }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  
+
   // 🔒 Validación estricta: Solo los Master ven el botón Settings
   const isMaster = userRole.toLowerCase().includes('master');
   // 👁️ Verificación visual: Si ya estamos en la página de Settings, ocultar el botón
@@ -40,17 +40,17 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
 
   return (
     <>
-      <DemoBanner /> 
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <DemoBanner />
+      <div className="min-h-screen w-full max-w-full overflow-x-hidden box-border bg-gray-50 flex flex-col">
         <div className="bg-white border-b-4 border-brand-900 p-3 flex justify-between items-center shadow-md shrink-0">
           <div className="flex items-center gap-4">
             <img src={ebLogo} alt="Eastern Busway Alliance" className="h-10 object-contain" />
             <div className="flex flex-col">
-                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest leading-tight">{userEmail}</span>
-                <span className="text-xs font-black text-brand-700 uppercase">{userRole}</span>
+              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest leading-tight">{userEmail}</span>
+              <span className="text-xs font-black text-brand-700 uppercase">{userRole}</span>
             </div>
           </div>
-          
+
           <div className="flex gap-2">
             {!isSettingsPage && (
               <button
@@ -72,7 +72,7 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 min-w-0 w-full max-w-full overflow-x-hidden overflow-y-auto box-border">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/new" element={<NewPermit onCancel={() => navigate('/')} onComplete={() => navigate('/')} />} />
@@ -80,7 +80,7 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
             <Route path="/new-pump" element={<NewPumpPermit onCancel={() => navigate('/')} onComplete={() => navigate('/')} />} />
             <Route path="/pump-permit/:id" element={<PumpPermitDetailContainer />} />
             <Route path="/under-construction" element={<UnderConstruction />} />
-            <Route path="/settings" element={<SettingsPage />} /> 
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
@@ -118,14 +118,14 @@ const App: React.FC = () => {
 
   const handleLoginSuccess = (email: string) => {
     setIsAuthenticated(true);
-    setUserRole(getUserRole()); 
+    setUserRole(getUserRole());
     setUserEmail(email);
   };
 
   const handleLogout = () => {
     if (confirm("Are you sure you want to securely log out?")) {
-      logoutCX(); 
-      getAuth().signOut(); 
+      logoutCX();
+      getAuth().signOut();
       setIsAuthenticated(false);
       setUserRole('');
       setUserEmail('');
@@ -154,7 +154,7 @@ const App: React.FC = () => {
             Powered by Can You Dig It
           </p>
         </div>
-        <LoginModal isOpen={true} onClose={() => {}} onLogin={handleLoginSuccess} />
+        <LoginModal isOpen={true} onClose={() => { }} onLogin={handleLoginSuccess} />
       </div>
     );
   }

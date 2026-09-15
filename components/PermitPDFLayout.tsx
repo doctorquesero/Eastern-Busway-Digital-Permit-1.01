@@ -48,13 +48,13 @@ const Page: React.FC<{ children: React.ReactNode, pageNum: number | string }> = 
 const EBASignature: React.FC<{ title: string; sig?: Signature | null; date?: string; initialTitle?: string }> = ({ title, sig, date, initialTitle = "Signature" }) => (
     <div className="flex border border-black text-[10px] font-bold w-full mt-2">
         <div className="bg-blue-700 text-white p-2 flex items-center justify-center w-1/4 text-center uppercase">{title}</div>
-        <div className="p-1 w-1/4 flex items-center justify-center border-r border-black bg-gray-50 uppercase text-center leading-tight">{sig?.name || ''}</div>
+        <div className="p-1 w-1/4 flex items-center justify-center border-r border-black bg-gray-50 uppercase text-center leading-tight">{sig?.name || 'N/A'}</div>
         <div className="bg-blue-700 text-white p-2 flex items-center justify-center w-1/6 text-center uppercase">{initialTitle}</div>
         <div className="p-0.5 w-1/4 flex items-center justify-center border-r border-black">
             {sig?.data && <img src={sig.data} className="h-8 object-contain mix-blend-multiply" alt="sig" />}
         </div>
         <div className="bg-blue-700 text-white p-2 flex items-center justify-center w-1/12 text-center uppercase">Date</div>
-        <div className="p-1 w-1/6 flex items-center justify-center font-mono text-[9px] text-center">{date || (sig?.date ? new Date(sig.date).toLocaleDateString() : '')}</div>
+        <div className="p-1 w-1/6 flex items-center justify-center font-mono text-[9px] text-center">{date || (sig?.date ? new Date(sig.date).toLocaleDateString() : 'N/A')}</div>
     </div>
 );
 
@@ -107,9 +107,29 @@ export const EmergencyProtocolContent: React.FC<{ isPdf?: boolean }> = ({ isPdf 
 
 const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, currentReceiverSignature, partAItems, partBItems, receiverItems, handoverItems, currentHandovers, CEASE_WORKS_ITEMS }) => {
 
-    const pNum = String(permit.itwocxNumber || permit.permitNumber || "").replace(/\D/g, "");
+    const safePermit = {
+        ...permit,
+        itwocxNumber: permit?.itwocxNumber || 'N/A',
+        permitNumber: permit?.permitNumber || 'N/A',
+        location: permit?.location || 'N/A',
+        status: permit?.status || 'N/A',
+        scopeOfWorks: permit?.scopeOfWorks || 'N/A',
+        partACloseApproach: permit?.partACloseApproach || {},
+        issuerComments: permit?.issuerComments || {},
+        approverComments: permit?.approverComments || {},
+        dailyLogs: Array.isArray(permit?.dailyLogs) ? permit.dailyLogs : [],
+        handoverLogs: Array.isArray(permit?.handoverLogs) ? permit.handoverLogs : [],
+        crewMembers: Array.isArray(permit?.crewMembers) ? permit.crewMembers : [],
+        photos: Array.isArray(permit?.photos) ? permit.photos : [],
+        receiverName: permit?.receiverName || 'N/A',
+        receiverEmail: permit?.receiverEmail || 'N/A',
+        receiverSignature: permit?.receiverSignature || null,
+        otherNotes: permit?.otherNotes || 'N/A'
+    } as Permit;
 
-    const photos = permit.photos || [];
+    const pNum = String(safePermit?.itwocxNumber || safePermit?.permitNumber || 'N/A').replace(/\D/g, '') || 'N/A';
+
+    const photos = safePermit?.photos || [];
     const photoPages = [];
     for (let i = 0; i < photos.length; i += 2) {
         photoPages.push(photos.slice(i, i + 2));
@@ -132,12 +152,12 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <div className="flex flex-col items-center justify-center h-full text-center pb-32">
                     <h1 className="text-4xl font-black text-blue-800 mb-6 uppercase">Breaking Ground Permit</h1>
                     <p className="text-xl font-bold mb-2">Permit Reference: PF#{pNum}</p>
-                    <p className="text-lg text-gray-700 mb-12">Location: {permit.location}</p>
+                    <p className="text-lg text-gray-700 mb-12">Location: {safePermit?.location || 'N/A'}</p>
 
                     <div className="border-4 border-blue-100 p-8 rounded-xl max-w-lg mx-auto bg-blue-50/50 text-left">
                         <p className="font-bold text-sm mb-2 text-blue-900 uppercase">System Generated Record</p>
                         <p className="text-xs mb-1">Generated on: {new Date().toLocaleString()}</p>
-                        <p className="text-xs mb-1">Status: <span className="font-black uppercase">{permit.status}</span></p>
+                        <p className="text-xs mb-1">Status: <span className="font-black uppercase">{safePermit?.status || 'N/A'}</span></p>
                         <p className="text-xs mt-4 italic text-gray-600">This digital record replaces the printed CX Form. The form must be printed using a scale of 70% if hardcopy is required. No resolution is lost.</p>
                     </div>
                 </div>
@@ -300,7 +320,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <div className="mt-auto space-y-2">
                     <EBASignature title="Permit Requester" sig={permit.siteEngineerSignature} />
                     {/* 🚀 FIX: Usamos permit.receiverSignature (el receptor inicial/inducción) para congelar la Parte A */}
-                    <EBASignature title="Permit Receiver" sig={permit.receiverSignature} />
+                    <EBASignature title="Permit Receiver" sig={permit?.receiverSignature} />
                 </div>
             </Page>
 
@@ -385,7 +405,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <p className="text-red-600 text-[10px] font-bold mb-4">The original copy of this Permit must be retained at the work location while work is occurring.</p>
                 <p className="text-[10px] mb-4">I confirm that all the requirements of these checklists have been met and work may now proceed in accordance with the WMS, JSEA and SP27 Safe Work around Overhead and Underground Services.</p>
                 {/* 🚀 FIX: Usamos permit.receiverSignature (el receptor inicial/inducción) para congelar la página 6 */}
-                <EBASignature title="Permit Receiver" sig={permit.receiverSignature} />
+                    <EBASignature title="Permit Receiver" sig={permit?.receiverSignature} />
             </Page>
 
             {/* === PAGE 7 === */}
@@ -489,9 +509,9 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                                 <tr key={i} className="h-8">
                                     <td className="border border-black p-1 text-center">{i + 1}.</td>
                                     <td className="border border-black p-1 font-bold uppercase">{h?.receiverName || ''}</td>
-                                    <td className="border border-black p-0"><div className="flex justify-start pl-2">{h?.signature?.data && <img src={h.signature.data} className="h-6 object-contain mix-blend-multiply" alt="sig" />}</div></td>
-                                    <td className="border border-black p-0"><div className="flex justify-center">{h?.signature?.data && <img src={h.signature.data} className="h-4 object-contain mix-blend-multiply" alt="sig" />}</div></td>
-                                    <td className="border border-black p-1 font-mono text-[9px]">{h?.date ? new Date(h.date).toLocaleDateString() : ''}</td>
+                                        <td className="border border-black p-0"><div className="flex justify-start pl-2">{h?.signature?.data && <img src={h?.signature?.data} className="h-6 object-contain mix-blend-multiply" alt="sig" />}</div></td>
+                                        <td className="border border-black p-0"><div className="flex justify-center">{h?.signature?.data && <img src={h?.signature?.data} className="h-4 object-contain mix-blend-multiply" alt="sig" />}</div></td>
+                                        <td className="border border-black p-1 font-mono text-[9px]">{h?.date ? new Date(h?.date).toLocaleDateString() : 'N/A'}</td>
                                 </tr>
                             )
                         })}
@@ -509,13 +529,13 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                             {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-1 text-center font-mono">{permit.dailyLogs?.[i]?.date || ''}</td>)}
                         </tr>
                         <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black">Reviewed by Permit Receiver</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit.dailyLogs?.[i]?.receiverSig?.data && <img src={permit.dailyLogs[i].receiverSig.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit?.dailyLogs?.[i]?.receiverSig?.data && <img src={permit?.dailyLogs?.[i]?.receiverSig?.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
                         </tr>
                         <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black">Signed by excavator operator</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit.dailyLogs?.[i]?.excavatorSig?.data && <img src={permit.dailyLogs[i].excavatorSig.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit?.dailyLogs?.[i]?.excavatorSig?.data && <img src={permit?.dailyLogs?.[i]?.excavatorSig?.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
                         </tr>
                         <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black">Signed by spotter</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit.dailyLogs?.[i]?.spotterSig?.data && <img src={permit.dailyLogs[i].spotterSig.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit?.dailyLogs?.[i]?.spotterSig?.data && <img src={permit?.dailyLogs?.[i]?.spotterSig?.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
                         </tr>
                     </tbody>
                 </table>
@@ -591,7 +611,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
 
                 <div className="border border-black min-h-[300px] flex flex-col mt-4">
                     <div className="bg-gray-100 font-bold text-[10px] p-1 border-b border-black shrink-0">Other Notes (these notes are not to be conditional comments)</div>
-                    <div className="p-2 text-[10px] whitespace-pre-wrap flex-grow">{permit.otherNotes}</div>
+                    <div className="p-2 text-[10px] whitespace-pre-wrap flex-grow">{safePermit?.otherNotes || 'N/A'}</div>
                 </div>
             </Page>
 

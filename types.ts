@@ -95,7 +95,7 @@ export interface Permit {
     permitType?: 'excavation' | 'pump';
     status: 'draft' | 'active' | 'closed';
     createdAt: string;
-    
+
     // Page 1 & 2: Site Plan & Base Details
     location: string;
     revealModelLayer: boolean;
@@ -106,7 +106,7 @@ export interface Permit {
     // Page 3: Risk Assessment & Scope (Issuer & Site Engineer)
     scopeOfWorks: string;
     excavationType: 'mechanical' | 'hydro' | 'hand';
-    
+
     // --> Issuer Questions (Pg 3)
     knownServicesScanned: 'yes' | 'no' | 'n/a' | null;
     servicesMarked: 'yes' | 'no' | 'n/a' | null;
@@ -134,8 +134,12 @@ export interface Permit {
     siteEngineerSignature?: Signature;
     issuerSignature?: Signature;
     receiverSignature?: Signature;
+    issuerEmail?: string;
+    receiverEmail?: string;
+    receiver?: string;
+    receiverName?: string;
     approverSignature?: Signature;
-    
+
     // Logs and attachments (Pg 10 & 12)
     dailyLogs: DailySignOff[];
     handoverLogs: HandoverLog[];
@@ -145,7 +149,7 @@ export interface Permit {
     approverComments?: Record<string, string>;
     issuerComments?: Record<string, string>;
     ceaseWorksRecord?: CeaseWorksRecord;
-    
+
     // Closure (Pg 11)
     closureSignature?: Signature;
     closureReceiverName?: string;

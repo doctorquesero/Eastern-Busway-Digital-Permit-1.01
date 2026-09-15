@@ -2,6 +2,7 @@ import { collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Permit } from '../types';
 import { getTargetCollection, getAppMode } from '../utils/appMode';
+import { sanitizeForFirestore } from '../utils/firestore';
 
 // 🚀 REINICIO MAESTRO: Versión 3 (Pizarra 100% limpia)
 const STORAGE_KEY = 'eba_permits_db_v3';
@@ -51,7 +52,7 @@ export const savePermit = (permit: Permit): void => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(localPermitsCache));
 
   // 2. GUARDADO EN LA NUBE (En segundo plano)
-  const cleanPermitForFirebase = JSON.parse(JSON.stringify(permit));
+  const cleanPermitForFirebase = sanitizeForFirestore(permit);
 
   const permitRef = doc(db, getTargetCollection(), permit.id);
   setDoc(permitRef, cleanPermitForFirebase).catch(err => {

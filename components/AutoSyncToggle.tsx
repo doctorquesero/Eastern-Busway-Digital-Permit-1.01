@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { sanitizeForFirestore } from '../utils/firestore';
 import { Loader2 } from 'lucide-react';
 import { getCurrentUserEmail } from '../services/cx';
 
@@ -34,15 +35,15 @@ export const AutoSyncToggle: React.FC = () => {
     const handleToggle = async () => {
         if (!isMaster) return alert("Access Denied: Master Clearance Required.");
         const newValue = !enableCxSync;
-        
-        const confirmMessage = newValue 
-            ? "Are you sure you want to ENABLE Auto-Sync from iTwoCX?" 
+
+        const confirmMessage = newValue
+            ? "Are you sure you want to ENABLE Auto-Sync from iTwoCX?"
             : "Are you sure you want to DISABLE Auto-Sync from iTwoCX? (Incoming webhooks will be ignored)";
-            
+
         if (window.confirm(confirmMessage)) {
             setIsLoading(true);
             try {
-                await setDoc(doc(db, 'settings', 'config'), { enableCxSync: newValue }, { merge: true });
+                await setDoc(doc(db, 'settings', 'config'), sanitizeForFirestore({ enableCxSync: newValue }), { merge: true });
                 setEnableCxSync(newValue);
             } catch (e) {
                 console.error("Error updating config:", e);
@@ -64,7 +65,7 @@ export const AutoSyncToggle: React.FC = () => {
                     {enableCxSync ? 'ENABLED' : 'DISABLED'}
                 </strong>
             </p>
-            <button 
+            <button
                 onClick={handleToggle}
                 disabled={isLoading}
                 style={{

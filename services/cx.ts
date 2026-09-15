@@ -36,20 +36,23 @@ export const getActiveSessionKey = () => { return ""; };
 // 🧠 ASIGNACIÓN DE ROLES DINÁMICA (MANTENIDA PORQUE ES DE FIREBASE)
 // ============================================================================
 export const assignUserRoleByEmail = async (email: string): Promise<string> => {
-    const loginId = email.toLowerCase();
-    let assignedRole = "Site Engineer"; 
-    
+    const loginId = String(email || '').toLowerCase();
+    let assignedRole = "Site Engineer";
+
     try {
         const docRef = doc(db, 'appSettings', 'global');
         const docSnap = await getDoc(docRef);
-        
+
         if (docSnap.exists()) {
             const data = docSnap.data();
-            const roles: {email: string, role: string}[] = data.roleAssignments || [];
-            const userMatch = roles.find(u => loginId.includes(u.email.toLowerCase()));
-            
+            const roles: { email?: string, role?: string }[] = Array.isArray(data.roleAssignments) ? data.roleAssignments : [];
+            const userMatch = roles.find(u => {
+                const assignedEmail = String(u?.email || '').toLowerCase();
+                return assignedEmail && loginId.includes(assignedEmail);
+            });
+
             if (userMatch) {
-                assignedRole = userMatch.role;
+                assignedRole = userMatch.role || assignedRole;
             }
         } else {
             if (loginId.includes('dietrich') || loginId.includes('eba-dt')) {

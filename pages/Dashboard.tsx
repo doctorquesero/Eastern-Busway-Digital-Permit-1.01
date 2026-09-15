@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, doc, deleteDoc, query, where } from 'firebase/firestore'; 
-import { db } from '../firebase'; 
-import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff } from 'lucide-react'; 
+import { collection, getDocs, doc, deleteDoc, query, where } from 'firebase/firestore';
+import { db } from '../firebase';
+import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff } from 'lucide-react';
 import { getCurrentUserEmail, getCircuitBreakerRemainingTime } from '../services/cx';
 import { getAppMode, getTargetCollection } from '../utils/appMode';
 
@@ -26,7 +26,7 @@ const permitCategories = [
   { code: 'USW2', name: 'Utility Services L2', icon: '⚡', color: 'bg-pink-50 text-pink-400', border: 'border-pink-100' },
 ];
 
-const MASTER_SECURITY_PIN = "CX-Master-2026"; 
+const MASTER_SECURITY_PIN = "CX-Master-2026";
 
 const ALL_COLUMNS = [
   { id: 'reference', label: 'Reference', alwaysVisible: true },
@@ -48,7 +48,7 @@ export const Dashboard = () => {
   // 🚀 NUEVO: Estado Reactivo para el Modo de la App
   const [appMode, setAppMode] = useState(getAppMode());
 
-  const [deleteTarget, setDeleteTarget] = useState<{id: string, num: string} | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string, num: string } | null>(null);
   const [securityPin, setSecurityPin] = useState('');
   const [pinError, setPinError] = useState('');
 
@@ -57,10 +57,12 @@ export const Dashboard = () => {
 
   const [selectedColumns, setSelectedColumns] = useState<string[]>(['reference', 'type', 'location', 'status', 'action']);
   const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [cbTimeLeft, setCbTimeLeft] = useState(0);
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>({
-      status: [], engineer: [], receiver: [], issuer: [], approver: []
+    status: [], engineer: [], receiver: [], issuer: [], approver: []
   });
 
   const loadPermits = async () => {
@@ -70,8 +72,8 @@ export const Dashboard = () => {
       const querySnapshot = await getDocs(q);
       const permitsFromCloud: any[] = [];
       querySnapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          permitsFromCloud.push({ id: docSnap.id, ...data });
+        const data = docSnap.data();
+        permitsFromCloud.push({ id: docSnap.id, ...data });
       });
 
       permitsFromCloud.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -85,19 +87,19 @@ export const Dashboard = () => {
           const arr = Array.isArray(parsed) ? parsed : Object.values(parsed);
           arr.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
           setSavedPermits(arr);
-        } catch (parseErr) {}
+        } catch (parseErr) { }
       }
     } finally {
       setIsSyncing(false);
     }
   };
 
-  useEffect(() => { 
-    loadPermits(); 
+  useEffect(() => {
+    loadPermits();
     const cbInterval = setInterval(() => {
       setCbTimeLeft(getCircuitBreakerRemainingTime());
     }, 1000);
-    const interval = setInterval(loadPermits, 15000); 
+    const interval = setInterval(loadPermits, 15000);
 
     // 🚀 RADAR: Revisa el modo de la app cada medio segundo
     const modeRadar = setInterval(() => {
@@ -105,9 +107,9 @@ export const Dashboard = () => {
     }, 500);
 
     return () => {
-        clearInterval(cbInterval);
-        clearInterval(interval);
-        clearInterval(modeRadar);
+      clearInterval(cbInterval);
+      clearInterval(interval);
+      clearInterval(modeRadar);
     };
   }, []);
 
@@ -131,8 +133,8 @@ export const Dashboard = () => {
     if (securityPin !== MASTER_SECURITY_PIN) return setPinError('Invalid Security PIN. Access Denied.');
     if (!deleteTarget) return;
     try {
-      await deleteDoc(doc(db, getTargetCollection(), deleteTarget.id)); 
-      setSavedPermits(prev => prev.filter(p => p.id !== deleteTarget.id)); 
+      await deleteDoc(doc(db, getTargetCollection(), deleteTarget.id));
+      setSavedPermits(prev => prev.filter(p => p.id !== deleteTarget.id));
       setDeleteTarget(null);
       alert(`✅ Permit PF#${deleteTarget.num} was securely and permanently deleted.`);
     } catch (error: any) {
@@ -151,17 +153,42 @@ export const Dashboard = () => {
   }, [savedPermits]);
 
   const filteredPermits = savedPermits.filter(p => {
+    const sanitize = (value: any) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const safeSearch = sanitize(searchQuery);
+    const matchesSearch = !safeSearch || [
+      p.permitNumber,
+      p.itwocxNumber,
+      p.id,
+      p.docCode,
+      p.location,
+      p.description,
+      p.contractor
+    ].some(value => sanitize(value).includes(safeSearch));
+
+    if (!matchesSearch) return false;
 
     const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
-    
+
     if (columnFilters.status.length > 0 && !columnFilters.status.includes(pStatus)) return false;
     if (columnFilters.engineer.length > 0 && !columnFilters.engineer.includes(p.siteEngineerSignature?.name)) return false;
     if (columnFilters.receiver.length > 0 && !columnFilters.receiver.includes(p.receiverSignature?.name)) return false;
     if (columnFilters.issuer.length > 0 && !columnFilters.issuer.includes(p.issuerSignature?.name)) return false;
     if (columnFilters.approver.length > 0 && !columnFilters.approver.includes(p.approverSignature?.name)) return false;
-    
-    return true; 
+
+    return true;
   });
+
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filteredPermits.length / pageSize));
+  const visiblePermits = filteredPermits.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, columnFilters]);
+
+  useEffect(() => {
+    setCurrentPage(page => Math.min(page, totalPages));
+  }, [totalPages]);
 
   const toggleColumn = (colId: string) => {
     if (ALL_COLUMNS.find(c => c.id === colId)?.alwaysVisible) return;
@@ -188,8 +215,8 @@ export const Dashboard = () => {
   const totalActive = filteredPermits.filter(p => !p.isDraft && p.status !== 'closed').length;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6 relative">
-      
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden box-border bg-gray-50 p-4 sm:p-6 relative">
+
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl border-t-4 border-red-600 p-6">
@@ -201,13 +228,13 @@ export const Dashboard = () => {
             <div className="h-6 mb-4">{pinError && <p className="text-red-600 text-xs font-bold text-center">{pinError}</p>}</div>
             <div className="flex justify-end gap-3">
               <button onClick={() => setDeleteTarget(null)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-black uppercase text-xs rounded-xl hover:bg-gray-200">Cancel</button>
-              <button onClick={executeSecureDeletion} className="flex-1 py-3 bg-red-600 text-white font-black uppercase text-xs rounded-xl hover:bg-red-700 flex items-center justify-center gap-2"><Trash2 size={16}/> Delete</button>
+              <button onClick={executeSecureDeletion} className="flex-1 py-3 bg-red-600 text-white font-black uppercase text-xs rounded-xl hover:bg-red-700 flex items-center justify-center gap-2"><Trash2 size={16} /> Delete</button>
             </div>
           </div>
         </div>
       )}
 
-      <div className="max-w-[1400px] mx-auto space-y-8">
+      <div className="w-full max-w-full min-w-0 xl:max-w-[1400px] mx-auto space-y-8">
         <div className="flex justify-between items-end">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Work Permits Dashboard</h1>
@@ -221,7 +248,7 @@ export const Dashboard = () => {
               </div>
             )}
             <button onClick={loadPermits} disabled={isSyncing} className="flex items-center gap-2 bg-white border border-gray-300 shadow-sm px-4 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all">
-              {isSyncing ? <Loader2 size={16} className="animate-spin"/> : <RefreshCw size={16} />}
+              {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
               <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Refresh Cloud'}</span>
             </button>
           </div>
@@ -244,10 +271,26 @@ export const Dashboard = () => {
 
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b pb-2 relative">
-              <h2 className="text-2xl font-bold text-gray-900">Cloud Synced Permits</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Cloud Synced Permits</h2>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search permit #..."
+                  value={searchQuery}
+                  onChange={event => setSearchQuery(event.target.value)}
+                  className="w-full sm:w-48 focus:sm:w-64 pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white focus:outline-none focus:border-blue-500 shadow-sm transition-all"
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" aria-label="Clear search">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <button onClick={() => setShowColumnSelector(!showColumnSelector)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 shadow-sm transition-colors">
-                    <Columns size={16} /> COLUMNS
+                  <Columns size={16} /> COLUMNS
                 </button>
                 {showColumnSelector && (
                   <div className="absolute right-0 top-12 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
@@ -255,7 +298,7 @@ export const Dashboard = () => {
                     <div className="max-h-64 overflow-y-auto p-2">
                       {ALL_COLUMNS.map(col => (
                         <label key={col.id} className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors ${col.alwaysVisible ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                          {selectedColumns.includes(col.id) ? <CheckSquare size={18} className="text-blue-600"/> : <Square size={18} className="text-gray-400"/>}
+                          {selectedColumns.includes(col.id) ? <CheckSquare size={18} className="text-blue-600" /> : <Square size={18} className="text-gray-400" />}
                           <span className="text-sm font-semibold text-gray-800">{col.label}</span>
                           <input type="checkbox" className="hidden" disabled={col.alwaysVisible} checked={selectedColumns.includes(col.id)} onChange={() => toggleColumn(col.id)} />
                         </label>
@@ -265,6 +308,7 @@ export const Dashboard = () => {
                   </div>
                 )}
               </div>
+            </div>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 min-h-[400px]">
@@ -286,25 +330,25 @@ export const Dashboard = () => {
                             )}
                           </div>
                           {activeFilterMenu === col.id && (
-                             <div className="absolute left-4 top-12 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden font-normal normal-case tracking-normal text-gray-900 animate-in fade-in slide-in-from-top-1">
-                                <div className="p-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
-                                   <div className="flex items-center gap-2 text-xs font-bold text-gray-500"><Search size={14}/> Filter {col.label}</div>
-                                   <button onClick={() => setActiveFilterMenu(null)} className="text-gray-400 hover:text-red-500"><X size={14}/></button>
-                                </div>
-                                <div className="max-h-48 overflow-y-auto p-1">
-                                   {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
-                                     <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
-                                       {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600"/> : <Square size={16} className="text-gray-300"/>}
-                                       {opt}
-                                       <input type="checkbox" className="hidden" checked={columnFilters[col.id].includes(opt)} onChange={() => toggleFilterOption(col.id, opt)} />
-                                     </label>
-                                   ))}
-                                </div>
-                                <div className="p-2 border-t border-gray-100 flex gap-2">
-                                    <button onClick={() => clearFilter(col.id)} className="flex-1 py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200">Clear</button>
-                                    <button onClick={() => setActiveFilterMenu(null)} className="flex-1 py-1.5 text-xs font-bold text-white bg-blue-600 rounded hover:bg-blue-700">Apply</button>
-                                </div>
-                             </div>
+                            <div className="absolute left-4 top-12 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden font-normal normal-case tracking-normal text-gray-900 animate-in fade-in slide-in-from-top-1">
+                              <div className="p-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                                <div className="flex items-center gap-2 text-xs font-bold text-gray-500"><Search size={14} /> Filter {col.label}</div>
+                                <button onClick={() => setActiveFilterMenu(null)} className="text-gray-400 hover:text-red-500"><X size={14} /></button>
+                              </div>
+                              <div className="max-h-48 overflow-y-auto p-1">
+                                {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
+                                  <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
+                                    {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} className="text-gray-300" />}
+                                    {opt}
+                                    <input type="checkbox" className="hidden" checked={columnFilters[col.id].includes(opt)} onChange={() => toggleFilterOption(col.id, opt)} />
+                                  </label>
+                                ))}
+                              </div>
+                              <div className="p-2 border-t border-gray-100 flex gap-2">
+                                <button onClick={() => clearFilter(col.id)} className="flex-1 py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200">Clear</button>
+                                <button onClick={() => setActiveFilterMenu(null)} className="flex-1 py-1.5 text-xs font-bold text-white bg-blue-600 rounded hover:bg-blue-700">Apply</button>
+                              </div>
+                            </div>
                           )}
                         </th>
                       );
@@ -314,19 +358,28 @@ export const Dashboard = () => {
                 <tbody className="divide-y divide-gray-100">
                   {filteredPermits.length === 0 ? (
                     <tr>
-                        <td colSpan={selectedColumns.length} className="p-12 text-center text-gray-400">
-                            <Search size={48} className='mx-auto mb-4 opacity-30 text-gray-300'/>
-                            <p className='font-bold uppercase tracking-wider text-gray-500'>No results found</p>
-                            <p className='text-xs mt-1'>Switch mode or check filters.</p>
-                        </td>
+                      <td colSpan={selectedColumns.length} className="p-12 text-center text-gray-400">
+                        <Search size={48} className='mx-auto mb-4 opacity-30 text-gray-300' />
+                        <p className='font-bold uppercase tracking-wider text-gray-500'>No results found</p>
+                        <p className='text-xs mt-1'>Switch mode or check filters.</p>
+                      </td>
                     </tr>
                   ) : (
-                    filteredPermits.map((p) => {
+                    visiblePermits.map((p) => {
                       const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
                       const permitTypeDisplay = p.permitType ? String(p.permitType).toUpperCase() : (p.excavationType ? String(p.excavationType).toUpperCase() : 'BG');
                       return (
                         <tr key={p.id} className="hover:bg-gray-50 transition-colors">
-                          {selectedColumns.includes('reference') && <td className="p-4 font-black text-blue-700">{p.itwocxNumber || p.permitNumber || 'DRAFT'}</td>}
+                          {selectedColumns.includes('reference') && (
+                            <td className="p-4">
+                              <button
+                                onClick={() => navigate(permitTypeDisplay === 'PUMP' ? `/pump-permit/${p.id}` : `/permit/${p.id}`)}
+                                className="font-black text-blue-700 hover:text-blue-900 hover:underline cursor-pointer transition-colors text-left"
+                              >
+                                {p.itwocxNumber || p.permitNumber || 'DRAFT'}
+                              </button>
+                            </td>
+                          )}
                           {selectedColumns.includes('type') && <td className="p-4 font-bold text-gray-700"><span className="px-2 py-1 bg-slate-100 text-slate-800 border border-slate-200 rounded-md text-[10px] font-black uppercase tracking-wider">{permitTypeDisplay}</span></td>}
                           {selectedColumns.includes('location') && <td className="p-4 text-gray-600 font-medium">{p.location || '-'}</td>}
                           {selectedColumns.includes('status') && (
@@ -359,23 +412,35 @@ export const Dashboard = () => {
                 </tbody>
               </table>
             </div>
+            {filteredPermits.length > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-gray-200 px-4 py-3">
+                <span className="text-xs font-bold text-gray-500">
+                  Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, filteredPermits.length)} of {filteredPermits.length}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setCurrentPage(page => Math.max(1, page - 1))} disabled={currentPage === 1} className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-bold text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50">Previous</button>
+                  <span className="text-xs font-black text-gray-700">Page {currentPage} of {totalPages}</span>
+                  <button onClick={() => setCurrentPage(page => Math.min(totalPages, page + 1))} disabled={currentPage === totalPages} className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-bold text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50">Next</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="mt-12">
           <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-2">Permit Action Center</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
             {permitCategories.map((permit) => {
-                const isTemplateAvailable = ['BG', 'BGP', 'BE', 'PUMP'].includes(permit.code);
-                return (
-                  <div key={permit.code} onClick={() => handleCategoryClick(permit.code)} className={`bg-white rounded-xl shadow-sm border ${permit.border} p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${isTemplateAvailable ? 'hover:shadow-md hover:border-blue-500 hover:ring-1 hover:ring-blue-500' : 'opacity-60 grayscale-[0.5] hover:bg-gray-50'}`}>
-                    <span className={`text-2xl p-3 rounded-full mb-3 ${permit.color}`}>{permit.icon}</span>
-                    <h3 className="font-bold text-gray-800 text-xs uppercase tracking-tight">{permit.name}</h3>
-                    <div className='flex items-center gap-1 mt-1'>
-                        <span className="text-[9px] font-black text-gray-400 uppercase">{permit.code}</span>
-                        {!isTemplateAvailable && <span className='text-[8px] bg-gray-200 text-gray-500 px-1 rounded font-bold'>WIP</span>}
-                    </div>
+              const isTemplateAvailable = ['BG', 'BGP', 'BE', 'PUMP'].includes(permit.code);
+              return (
+                <div key={permit.code} onClick={() => handleCategoryClick(permit.code)} className={`bg-white rounded-xl shadow-sm border ${permit.border} p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${isTemplateAvailable ? 'hover:shadow-md hover:border-blue-500 hover:ring-1 hover:ring-blue-500' : 'opacity-60 grayscale-[0.5] hover:bg-gray-50'}`}>
+                  <span className={`text-2xl p-3 rounded-full mb-3 ${permit.color}`}>{permit.icon}</span>
+                  <h3 className="font-bold text-gray-800 text-xs uppercase tracking-tight">{permit.name}</h3>
+                  <div className='flex items-center gap-1 mt-1'>
+                    <span className="text-[9px] font-black text-gray-400 uppercase">{permit.code}</span>
+                    {!isTemplateAvailable && <span className='text-[8px] bg-gray-200 text-gray-500 px-1 rounded font-bold'>WIP</span>}
                   </div>
-                );
+                </div>
+              );
             })}
           </div>
         </div>
