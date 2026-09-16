@@ -27,6 +27,7 @@ const permitCategories = [
 ];
 
 const MASTER_SECURITY_PIN = "CX-Master-2026";
+const COLUMN_FILTERS_STORAGE_KEY = 'eba_dashboard_column_filters';
 
 const ALL_COLUMNS = [
   { id: 'reference', label: 'Reference', alwaysVisible: true },
@@ -61,9 +62,27 @@ export const Dashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [cbTimeLeft, setCbTimeLeft] = useState(0);
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
-  const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>({
-    status: [], engineer: [], receiver: [], issuer: [], approver: []
+  const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(() => {
+    const defaults = { type: [], status: [], engineer: [], receiver: [], issuer: [], approver: [] };
+    try {
+      const cached = JSON.parse(localStorage.getItem(COLUMN_FILTERS_STORAGE_KEY) || '{}');
+      return Object.keys(defaults).reduce((filters, key) => ({
+        ...filters,
+        [key]: Array.isArray(cached[key]) ? cached[key] : []
+      }), defaults);
+    } catch {
+      return defaults;
+    }
   });
+
+  useEffect(() => {
+    const hasActiveFilters = Object.values(columnFilters).some(values => values.length > 0);
+    if (hasActiveFilters) {
+      localStorage.setItem(COLUMN_FILTERS_STORAGE_KEY, JSON.stringify(columnFilters));
+    } else {
+      localStorage.removeItem(COLUMN_FILTERS_STORAGE_KEY);
+    }
+  }, [columnFilters]);
 
   const loadPermits = async () => {
     setIsSyncing(true);
@@ -144,6 +163,7 @@ export const Dashboard = () => {
 
   const filterOptions = useMemo(() => {
     return {
+      type: Array.from(new Set([...permitCategories.map(category => category.code), ...savedPermits.flatMap(p => [p.permitType, p.type, p.excavationType]).filter(Boolean).map(String).map(value => value.toUpperCase())])).sort(),
       status: ['DRAFT', 'ACTIVE', 'CLOSED'],
       engineer: Array.from(new Set(savedPermits.map(p => p.siteEngineerSignature?.name).filter(Boolean))),
       receiver: Array.from(new Set(savedPermits.map(p => p.receiverSignature?.name).filter(Boolean))),
@@ -167,8 +187,10 @@ export const Dashboard = () => {
 
     if (!matchesSearch) return false;
 
+    const permitType = String(p.permitType || p.type || p.excavationType || 'BG').toUpperCase();
     const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
 
+    if (columnFilters.type.length > 0 && !columnFilters.type.includes(permitType)) return false;
     if (columnFilters.status.length > 0 && !columnFilters.status.includes(pStatus)) return false;
     if (columnFilters.engineer.length > 0 && !columnFilters.engineer.includes(p.siteEngineerSignature?.name)) return false;
     if (columnFilters.receiver.length > 0 && !columnFilters.receiver.includes(p.receiverSignature?.name)) return false;
@@ -176,6 +198,9 @@ export const Dashboard = () => {
     if (columnFilters.approver.length > 0 && !columnFilters.approver.includes(p.approverSignature?.name)) return false;
 
     return true;
+  }).sort((a, b) => {
+    const getPermitNumber = (permit: any) => Number.parseInt(String(permit.itwocxNumber || permit.permitNumber || '').replace(/\D/g, ''), 10) || 0;
+    return getPermitNumber(b) - getPermitNumber(a);
   });
 
   const pageSize = 10;
@@ -207,6 +232,14 @@ export const Dashboard = () => {
 
   const clearFilter = (colId: string) => {
     setColumnFilters(prev => ({ ...prev, [colId]: [] }));
+    setActiveFilterMenu(null);
+  };
+
+  const clearAllFilters = () => {
+    const emptyFilters = Object.keys(columnFilters).reduce((filters, key) => ({ ...filters, [key]: [] }), {} as Record<string, string[]>);
+    setSearchQuery('');
+    setColumnFilters(emptyFilters);
+    localStorage.removeItem(COLUMN_FILTERS_STORAGE_KEY);
     setActiveFilterMenu(null);
   };
 
@@ -308,6 +341,9 @@ export const Dashboard = () => {
                   </div>
                 )}
               </div>
+              <button onClick={clearAllFilters} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-black text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 shadow-sm transition-colors">
+                <X size={16} /> Clear All Filters
+              </button>
             </div>
           </div>
 

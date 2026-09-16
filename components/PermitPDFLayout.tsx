@@ -1,6 +1,7 @@
 import React from 'react';
 import { Permit, ChecklistItem, Signature, HandoverLog } from '../types';
 import { Phone } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 
 export interface PermitPDFLayoutProps {
     permit: Permit;
@@ -153,6 +154,11 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                     <h1 className="text-4xl font-black text-blue-800 mb-6 uppercase">Breaking Ground Permit</h1>
                     <p className="text-xl font-bold mb-2">Permit Reference: PF#{pNum}</p>
                     <p className="text-lg text-gray-700 mb-12">Location: {safePermit?.location || 'N/A'}</p>
+
+                    <div className="flex flex-col items-center mb-8">
+                        <QRCodeSVG value={`https://eba-digital-permits.web.app/#/permit/${safePermit.id}`} size={150} level="M" includeMargin />
+                        <p className="text-sm font-black uppercase tracking-wide mt-2">Scan for Digital Handover</p>
+                    </div>
 
                     <div className="border-4 border-blue-100 p-8 rounded-xl max-w-lg mx-auto bg-blue-50/50 text-left">
                         <p className="font-bold text-sm mb-2 text-blue-900 uppercase">System Generated Record</p>
