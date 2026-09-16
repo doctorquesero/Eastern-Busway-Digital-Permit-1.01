@@ -23,6 +23,7 @@ export const authenticateCX = async (email?: string, password?: string) => {
 };
 
 export const logoutCX = () => {
+    console.warn("LOCAL AUTH STATE CLEARED BY:", new Error().stack);
     currentRole = "";
     currentUserEmail = "";
     localStorage.removeItem('cx_current_role');

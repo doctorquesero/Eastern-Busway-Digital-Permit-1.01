@@ -345,7 +345,7 @@ export const Dashboard = () => {
                                 ))}
                               </div>
                               <div className="p-2 border-t border-gray-100 flex gap-2">
-                                <button onClick={() => clearFilter(col.id)} className="flex-1 py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200">Clear</button>
+                                <button onClick={() => clearFilter(col.id)} className="flex-1 py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded hover:bg-gray-200">Clear Filter</button>
                                 <button onClick={() => setActiveFilterMenu(null)} className="flex-1 py-1.5 text-xs font-bold text-white bg-blue-600 rounded hover:bg-blue-700">Apply</button>
                               </div>
                             </div>

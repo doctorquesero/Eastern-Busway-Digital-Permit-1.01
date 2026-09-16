@@ -17,7 +17,7 @@ export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const auth = getAuth(app);
 
-// 🚀 La persistencia ahora se maneja dinámicamente en LoginModal.tsx
+export const authPersistence = setPersistence(auth, browserLocalPersistence);
 
 export const uploadImageToStorage = async (base64String: string, filename: string): Promise<string> => {
   try {

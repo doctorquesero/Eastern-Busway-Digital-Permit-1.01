@@ -7,12 +7,13 @@ import NewPumpPermit from './pages/NewPumpPermit';
 import PumpPermitDetail from './pages/PumpPermitDetail';
 import { UnderConstruction } from './pages/UnderConstruction';
 import { Settings as SettingsPage } from './pages/Settings';
-import { logoutCX, getUserRole, getCurrentUserEmail, getActiveSessionKey } from './services/cx';
+import { logoutCX, getUserRole, getCurrentUserEmail } from './services/cx';
 import { LoginModal } from './components/LoginModal';
 import { DemoBanner } from './components/DemoBanner';
 import { LogOut, Loader2, Settings as SettingsIcon } from 'lucide-react';
 import ebLogo from './assets/eb-logo.png';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, authPersistence } from './firebase';
 
 const PermitDetailContainer = () => {
   const { id } = useParams<{ id: string }>();
@@ -96,23 +97,30 @@ const App: React.FC = () => {
   const [isCheckingSession, setIsCheckingSession] = useState(true);
 
   useEffect(() => {
-    const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      if (firebaseUser) {
-        const sessionKey = getActiveSessionKey();
-        if (!sessionKey) {
-          setIsAuthenticated(false);
-        } else {
+    let unsubscribe: (() => void) | undefined;
+    let isMounted = true;
+
+    const initializeAuth = async () => {
+      await authPersistence.catch(error => console.error('Unable to establish local auth persistence:', error));
+      if (!isMounted) return;
+
+      unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+        if (firebaseUser) {
           setIsAuthenticated(true);
           setUserRole(getUserRole());
-          setUserEmail(getCurrentUserEmail());
+          setUserEmail(getCurrentUserEmail() || firebaseUser.email || '');
+        } else {
+          setIsAuthenticated(false);
         }
-      } else {
-        setIsAuthenticated(false);
-      }
-      setIsCheckingSession(false);
-    });
-    return () => unsubscribe();
+        setIsCheckingSession(false);
+      });
+    };
+
+    initializeAuth();
+    return () => {
+      isMounted = false;
+      unsubscribe?.();
+    };
   }, []);
 
 
@@ -125,7 +133,8 @@ const App: React.FC = () => {
   const handleLogout = () => {
     if (confirm("Are you sure you want to securely log out?")) {
       logoutCX();
-      getAuth().signOut();
+      console.warn("SIGN OUT EXECUTED BY:", new Error().stack);
+      auth.signOut();
       setIsAuthenticated(false);
       setUserRole('');
       setUserEmail('');
@@ -142,6 +151,7 @@ const App: React.FC = () => {
   }
 
   if (!isAuthenticated) {
+    console.warn("Gating user to Login. Current Auth State:", auth.currentUser, "Loading:", isCheckingSession);
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-cover bg-center" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1541888087535-430953288591?q=80&w=2070&auto=format&fit=crop')" }}>
         <div className="absolute inset-0 bg-blue-900/80 backdrop-blur-sm"></div>

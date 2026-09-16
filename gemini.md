@@ -1,16 +1,13 @@
 CAN YOU DIG IT - MASTER CONFIGURATION & KNOWLEDGE BASE
-
 (Source of truth for all integrations, architecture, and developer rules)
 
 1. iTwoCX Integration Architecture (The "CX" Sync)
-
 The connection between Can You Dig It and the iTwoCX platform is strictly bound to the iTwoCX REST API. All code written by any AI agent MUST adhere to these exact constraints to avoid silent failures or API rejections.
 
 A. Dynamic Routing & Swagger Adherence
   - The iTwoCX API strictly requires the Project Code to be injected into the URL path, NOT passed as a query string or header. The official schema is: `/Api/{projectCode}/Endpoint/Method`.
   - Base URL Constraint: The base constant must be strictly `https://au.itwocx.com/api/25.12`.
   - Example LIVE Route: `/Api/EB/Document/GetByDocCode...`
-  - Example DEMO Route: `/Api/EB-DEMO/Document/GetByDocCode...`
 
 B. The "GetByDocCode" Constraint & Pagination
   - Never use `GetByReference`. The primary document identifier shown as "REF" in the CX UI actually maps to the `DocCode` database field.
@@ -60,3 +57,30 @@ C. Strict PDF Backup Sequence
 D. Draft State & Issue Validations
   - Visual State Integrity: The status badge "ISSUED / ACTIVE" must rely strictly on the `isDraft` boolean flag (`const isIssued = permit?.isDraft === false && !isClosed;`). Never rely on the database string `status`, as it defaults to `'active'`.
   - Issuance Locking: To issue a permit, it is mandatory that all 5 Issuer Verification Checks (Radio buttons: Scanned, Marked, Potholing, Transpower, Watercare) be completed. The issuance function must block execution if any are null or undefined.
+
+E. Legacy Data & Safe Undefined Fallbacks
+  - Legacy or test permits may lack modern nested objects (like `receiverEmail` or `receiverSignature`). All frontend filter pipelines, name evaluations, and closure validations MUST safely fallback to extracting names dynamically from the email string (e.g., `first.last@domain.com` -> First: "First", Last: "Last") to prevent silent runtime crashes or unauthorized lockouts.
+
+F. Permit-Level Role Exclusivity
+  - A strict business rule dictates that an Issuer CANNOT be assigned as the Receiver on the SAME permit. The UI (Dropdowns/Selectors) and submission logic must mutually exclude the selected user across these two roles.
+
+G. User Management & UI Binding Constraints
+  - Strict Data Collection: New user creation strictly mandates First Name, Last Name, Phone Number, and Email Address.
+  - Role Editing (Settings): Inline editing of user roles MUST utilize a multi-select checkbox group. It must dynamically enforce exclusivity (checking Issuer unchecks Receiver, and vice versa).
+  - UI Dropdown Mapping: For all UI dropdowns, the application MUST visually render the user's Full Name but strictly use the user's Email Address as the underlying `<option value="...">` for data binding.
+
+H. Single Environment Strictness (LIVE Only)
+  - The application operates permanently and exclusively in 'LIVE' mode.
+  - All DEMO mode toggles, environment switchers, and conditional routing based on environment are strictly PROHIBITED and must be eradicated from the codebase.
+  - The iTwoCX Project Code is strictly hardcoded to `EB`.
+
+I. Auth Session Persistence & Focus Stability
+  - Firebase Authentication MUST explicitly await `setPersistence(auth, browserLocalPersistence)` before evaluating the initial auth state to prevent session loss on page reloads.
+  - Rogue window focus events (`onblur`, `visibilitychange`, `contextmenu`) or right-click listeners must NEVER be tied to `signOut()` functions or auth state resets under any circumstances.
+
+J. Dashboard Filtering & UI Reset
+  - The Dashboard must feature an Excel-style multi-select filter architecture maintaining AND/OR logic.
+  - A global "Clear All Filters" (Reset All) button is mandatory. It must wipe the search query and reset all column state arrays instantly without requiring a page reload.
+
+K. Physical PDF Timeframe Integrity
+  - The permit's validity period (Start Date/Time and Expiry Date/Time) must be explicitly rendered in the physical PDF layout. This ensures field inspectors have immediate visual confirmation of the permit's active window.
