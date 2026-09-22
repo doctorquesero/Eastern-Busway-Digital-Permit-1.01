@@ -1,8 +1,12 @@
 // src/utils/appMode.ts
 
-// Por defecto, la app arranca en modo LIVE por seguridad.
 export const getAppMode = (): 'LIVE' | 'DEMO' => {
-    return (localStorage.getItem('eba_app_mode') as 'LIVE' | 'DEMO') || 'LIVE';
+    const storedMode = localStorage.getItem('eba_app_mode') as 'LIVE' | 'DEMO' | null;
+    if (storedMode === 'LIVE' || storedMode === 'DEMO') return storedMode;
+
+    const hostname = window.location.hostname;
+    const isLocalDevelopmentHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.');
+    return isLocalDevelopmentHost ? 'DEMO' : 'LIVE';
 };
 
 export const setAppMode = (mode: 'LIVE' | 'DEMO') => {

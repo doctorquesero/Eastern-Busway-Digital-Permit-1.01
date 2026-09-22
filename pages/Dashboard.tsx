@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, doc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff } from 'lucide-react';
+import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff, Plus, ChevronRight } from 'lucide-react';
 import { getCurrentUserEmail, getCircuitBreakerRemainingTime } from '../services/cx';
 import { getAppMode, getTargetCollection } from '../utils/appMode';
 
@@ -62,6 +62,7 @@ export const Dashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [cbTimeLeft, setCbTimeLeft] = useState(0);
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
+  const [showCreatePermit, setShowCreatePermit] = useState(false);
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(() => {
     const defaults = { type: [], status: [], engineer: [], receiver: [], issuer: [], approver: [] };
     try {
@@ -463,23 +464,57 @@ export const Dashboard = () => {
           </div>
         </div>
         <div className="mt-12">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-2">Permit Action Center</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-            {permitCategories.map((permit) => {
-              const isTemplateAvailable = ['BG', 'BGP', 'BE', 'PUMP'].includes(permit.code);
-              return (
-                <div key={permit.code} onClick={() => handleCategoryClick(permit.code)} className={`bg-white rounded-xl shadow-sm border ${permit.border} p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 ${isTemplateAvailable ? 'hover:shadow-md hover:border-blue-500 hover:ring-1 hover:ring-blue-500' : 'opacity-60 grayscale-[0.5] hover:bg-gray-50'}`}>
-                  <span className={`text-2xl p-3 rounded-full mb-3 ${permit.color}`}>{permit.icon}</span>
-                  <h3 className="font-bold text-gray-800 text-xs uppercase tracking-tight">{permit.name}</h3>
-                  <div className='flex items-center gap-1 mt-1'>
-                    <span className="text-[9px] font-black text-gray-400 uppercase">{permit.code}</span>
-                    {!isTemplateAvailable && <span className='text-[8px] bg-gray-200 text-gray-500 px-1 rounded font-bold'>WIP</span>}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="flex items-center justify-between gap-4 border-b pb-4">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Permit Action Center</h2>
+              <p className="text-sm text-gray-500 mt-1">Start a new permit from the available templates.</p>
+            </div>
+            <button onClick={() => setShowCreatePermit(true)} className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-blue-700 px-6 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg transition-colors hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-200">
+              <Plus size={20} /> Create Permit
+            </button>
           </div>
         </div>
+
+        {showCreatePermit && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="create-permit-title">
+            <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-6 py-5">
+                <div>
+                  <h2 id="create-permit-title" className="text-xl font-black uppercase tracking-tight text-gray-900">Create Permit</h2>
+                  <p className="mt-1 text-sm text-gray-500">Choose a permit type to begin.</p>
+                </div>
+                <button onClick={() => setShowCreatePermit(false)} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900" aria-label="Close create permit menu">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="grid max-h-[70vh] grid-cols-1 gap-3 overflow-y-auto p-5 sm:grid-cols-2">
+                {permitCategories.map((permit) => {
+                  const isActive = permit.code === 'BG' || permit.code === 'PUMP';
+                  return (
+                    <button
+                      key={permit.code}
+                      type="button"
+                      onClick={() => isActive && handleCategoryClick(permit.code)}
+                      disabled={!isActive}
+                      className={`flex items-center gap-4 rounded-xl border p-4 text-left transition-all ${isActive ? 'border-blue-200 bg-white text-gray-900 shadow-sm hover:border-blue-500 hover:bg-blue-50 hover:shadow-md' : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 opacity-70'}`}
+                    >
+                      <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl ${isActive ? permit.color : 'bg-gray-200 text-gray-400 grayscale'}`}>{permit.icon}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-black uppercase tracking-tight">{permit.name}</span>
+                        <span className="mt-1 flex items-center gap-2 text-[9px] font-black uppercase text-gray-400">
+                          {permit.code}
+                          {!isActive && <span className="rounded bg-gray-300 px-1.5 py-0.5 text-[8px] text-gray-600">WIP</span>}
+                          {isActive && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[8px] text-green-700">Available</span>}
+                        </span>
+                      </span>
+                      {isActive && <ChevronRight size={18} className="shrink-0 text-blue-600" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { ArrowLeft, CheckCircle, Camera, ImageIcon, Loader2, Trash2, Briefcase, ShieldCheck, Users, CloudUpload, FileCheck, Plus } from 'lucide-react';
 import { Permit, PermitPhoto, MonitoringLogEntry } from '../types';
-import { generatePermitNumber, savePermit, getPermits } from '../services/storage';
+import { savePermit, getPermits } from '../services/storage';
 import SignaturePad from '../components/SignaturePad';
 import { issuePermitToCX, getUserRole } from '../services/cx';
 import { uploadImageToStorage, db } from '../firebase';
@@ -21,7 +21,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
 
     const [formData, setFormData] = useState<Permit>({
         id: generateId(),
-        permitNumber: generatePermitNumber(),
+        permitNumber: '',
         itwocxNumber: '',
         permitType: 'pump',
         status: 'active',

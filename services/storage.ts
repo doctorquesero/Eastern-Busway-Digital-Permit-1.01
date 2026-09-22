@@ -61,7 +61,3 @@ export const savePermit = (permit: Permit): void => {
   });
 };
 
-export const generatePermitNumber = (): string => {
-  const count = localPermitsCache.length + 1;
-  return `EB-PT-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
-};

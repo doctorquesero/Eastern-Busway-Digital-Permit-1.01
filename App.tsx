@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
-import NewPermit from './pages/NewPermit';
+import NewPermitRoute from './pages/NewPermitRoute';
 import PermitDetail from './pages/PermitDetail';
 import NewPumpPermit from './pages/NewPumpPermit';
 import PumpPermitDetail from './pages/PumpPermitDetail';
@@ -76,7 +76,7 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
         <div className="flex-1 min-w-0 w-full max-w-full overflow-x-hidden overflow-y-auto box-border">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/new" element={<NewPermit onCancel={() => navigate('/')} onComplete={() => navigate('/')} />} />
+            <Route path="/new" element={<NewPermitRoute />} />
             <Route path="/permit/:id" element={<PermitDetailContainer />} />
             <Route path="/new-pump" element={<NewPumpPermit onCancel={() => navigate('/')} onComplete={() => navigate('/')} />} />
             <Route path="/pump-permit/:id" element={<PumpPermitDetailContainer />} />

@@ -105,3 +105,9 @@ J. Physical PDF QR Code (Digital Handover)
 K. Mobile & iOS Accessibility (WebKit Constraints)
   - CSS Typing Bug: To prevent iOS Safari from muting text inputs, all `input` and `textarea` elements must globally enforce `-webkit-user-select: text !important;` and `touch-action: manipulation;`.
   - File Uploads (Camera vs Gallery): File input components (`<input type="file">`) must omit the `capture="environment"` attribute to ensure iOS presents both "Take Photo" and "Photo Library" native options. Always use `accept="image/*, .heic, .heif"` to support Apple formats.
+
+3. Agent Behavioral Rules
+  - Permit creation must NEVER use dummy IDs or bypass DEMO/LIVE routing. Always preserve the original initialization payload and ITWOCX API standards. If unsure, stop and ask.
+
+STRICT DATA ENFORCEMENT
+RULE 1: I will NEVER invent permit IDs (e.g., EB-PT) or dummy data. RULE 2: 'Breaking Ground' permits MUST strictly use `permitType: 'BG'`. RULE 3: I will NEVER assume data structures; if I lack the original initialization logic, I will ask the Chief Architect before guessing. RULE 4: I must not break the LIVE vs DEMO environment toggles.
