@@ -165,7 +165,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const isSuspended = permit.ceaseWorksRecord?.actionTaken === 'suspended';
     const isHydro = permit.excavationType === 'hydro' || permit.excavationType === 'hand';
     const hasApproverSigned = !!permit.approverSignature?.data;
-    const arePermitDatesLocked = isClosed || isIssued || permit.status === 'active';
+    const arePermitDatesLocked = isClosed || isIssued || (permit.status === 'active' && permit.isDraft !== true);
 
     const isExecutionBlocked = isIssued && !isHydro && !hasApproverSigned && !isClosed && !isSuspended;
 
@@ -193,7 +193,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     };
 
     const updateField = (field: keyof Permit, value: any) => {
-        if (isClosed || (isIssued && ['location', 'excavationType', 'scopeOfWorks', 'siteEngineerSignature', 'receiverSignature'].includes(field))) return;
+        if (isClosed || (arePermitDatesLocked && ['issuedDate', 'commencementDate', 'endDate'].includes(field)) || (isIssued && ['location', 'excavationType', 'scopeOfWorks', 'siteEngineerSignature', 'receiverSignature'].includes(field))) return;
         syncToFirebase({ ...permit, [field]: value } as Permit);
     };
 
