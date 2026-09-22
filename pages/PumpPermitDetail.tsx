@@ -13,35 +13,13 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { getTargetCollection } from '../utils/appMode';
 import { sanitizeForFirestore } from '../utils/firestore';
+import { generateId } from '../utils/id';
+import { compressImageToJpeg } from '../utils/image';
 
 interface PumpPermitDetailProps {
     id: string;
     onBack: () => void;
 }
-
-const compressImage = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target?.result as string;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 1000; const MAX_HEIGHT = 1000;
-                let width = img.width; let height = img.height;
-                if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } }
-                else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
-                canvas.width = width; canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx?.drawImage(img, 0, 0, width, height);
-                resolve(canvas.toDataURL('image/jpeg', 0.7));
-            };
-            img.onerror = error => reject(error);
-        };
-        reader.onerror = error => reject(error);
-    });
-};
 
 const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     const [permit, setPermit] = useState<Permit | null>(null);
@@ -108,13 +86,13 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         setIsUploadingPhoto(true);
         try {
             const file = e.target.files[0];
-            const compressedDataUrl = await compressImage(file);
+            const compressedDataUrl = await compressImageToJpeg(file);
             const uniqueFilename = `draft_pump_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '')}`;
 
             const cloudUrl = await uploadImageToStorage(compressedDataUrl, uniqueFilename);
 
             const newPhoto: PermitPhoto = {
-                id: crypto.randomUUID(), url: cloudUrl, caption: file.name, uploadedBy: 'Team', date: new Date().toISOString()
+                id: generateId(), url: cloudUrl, caption: file.name, uploadedBy: 'Team', date: new Date().toISOString()
             };
             const updated = { ...permit, photos: [...permit.photos, newPhoto] };
             setPermit(updated);
@@ -126,13 +104,6 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
             setIsUploadingPhoto(false);
             e.target.value = '';
         }
-    };
-
-    const removePhoto = (photoId: string) => {
-        if (!permit) return;
-        const updated = { ...permit, photos: permit.photos.filter(p => p.id !== photoId) };
-        setPermit(updated);
-        handleSave(updated);
     };
 
     const handleSaveAndIssue = async () => {
@@ -171,7 +142,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     const addMonitoringLog = () => {
         if (!permit) return;
         const newLog: MonitoringLogEntry = {
-            id: crypto.randomUUID(),
+            id: generateId(),
             time: new Date().toTimeString().split(' ')[0].substring(0, 5),
             mon: '',
             tue: '',
@@ -445,7 +416,6 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                     <div key={photo.id} className="border border-gray-200 rounded-xl overflow-hidden shadow-md bg-white relative">
                                         <img src={photo.url} className="aspect-square object-cover w-full" />
                                         <div className="p-3 bg-gray-50 border-t"><p className="text-[10px] font-black uppercase text-gray-700 truncate">{photo.caption}</p></div>
-                                        {!isClosed && <button onClick={() => removePhoto(photo.id)} className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full shadow-lg"><Trash2 size={16} /></button>}
                                     </div>
                                 ))}
                             </div>
@@ -454,9 +424,10 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                         {!isClosed && (
                             <div className="border-4 border-dashed border-gray-300 p-8 rounded-[2rem] text-center bg-blue-50/30">
                                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                                    <button onClick={() => cameraInputRef.current?.click()} disabled={isUploadingPhoto} className="text-white px-8 py-4 rounded-xl font-black uppercase bg-blue-800 hover:bg-blue-900 shadow-lg flex items-center justify-center gap-2 w-full sm:w-auto">{isUploadingPhoto ? <Loader2 className="animate-spin" /> : <Camera size={20} />} Take HQ Photo</button>
-                                    <button onClick={() => galleryInputRef.current?.click()} disabled={isUploadingPhoto} className="text-blue-900 bg-white border-2 border-blue-200 hover:bg-blue-50 px-8 py-4 rounded-xl font-black uppercase flex items-center justify-center gap-2 transition-colors w-full sm:w-auto">{isUploadingPhoto ? <Loader2 className="animate-spin" /> : <ImageIcon size={20} />} Gallery</button>
+                                    <button onClick={() => cameraInputRef.current?.click()} disabled={isUploadingPhoto} className="text-white px-8 py-4 rounded-xl font-black uppercase bg-blue-800 hover:bg-blue-900 shadow-lg flex items-center justify-center gap-2 w-full sm:w-auto">{isUploadingPhoto ? <Loader2 className="animate-spin" /> : <Camera size={20} />} Take Photo</button>
+                                    <button onClick={() => galleryInputRef.current?.click()} disabled={isUploadingPhoto} className="text-blue-900 bg-white border-2 border-blue-200 hover:bg-blue-50 px-8 py-4 rounded-xl font-black uppercase flex items-center justify-center gap-2 transition-colors w-full sm:w-auto">{isUploadingPhoto ? <Loader2 className="animate-spin" /> : <ImageIcon size={20} />} Upload from Gallery</button>
                                 </div>
+                                {isUploadingPhoto && <p className="mt-4 text-sm font-bold text-blue-800" role="status">Processing and uploading photo...</p>}
                                 <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
                                 <input ref={galleryInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
                             </div>

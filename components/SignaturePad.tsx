@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { getAuth } from 'firebase/auth';
 import { Eraser, Check, Type, PenTool } from 'lucide-react';
 import { Signature, SignatureType } from '../types';
+import { getDisplayNameFromEmail } from '../utils/userNames';
 
 interface SignaturePadProps {
   label: string;
@@ -17,52 +17,45 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
   const [mode, setMode] = useState<SignatureType>('draw');
   const [signerName, setSignerName] = useState('');
   const [hasSignature, setHasSignature] = useState(false);
+  const displaySignerName = (name?: string) => name?.includes('@') ? getDisplayNameFromEmail(name) : name || '';
 
   useEffect(() => {
     if (initialValue) {
-        setMode(initialValue.type);
-        setSignerName(initialValue.name);
-        setHasSignature(true);
+      setMode(initialValue.type);
+      setSignerName(displaySignerName(initialValue.name));
+      setHasSignature(true);
     }
   }, [initialValue]);
-
-  useEffect(() => {
-    const currentUser = getAuth().currentUser as any;
-    const loggedInName = currentUser?.displayName || currentUser?.name || currentUser?.email || '';
-    if (loggedInName && !initialValue && !hasSignature && !externalName) {
-      setSignerName(loggedInName);
-    }
-  }, [initialValue, externalName, hasSignature]);
 
   // Sync with external name if provided and not yet signed
   useEffect(() => {
     if (externalName !== undefined && !hasSignature) {
-      setSignerName(externalName);
+      setSignerName(displaySignerName(externalName));
     }
   }, [externalName, hasSignature]);
 
   const getCoords = (e: React.MouseEvent | React.TouchEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
-    
+
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    
+
     let clientX = 0;
     let clientY = 0;
-    
+
     if ('touches' in e) {
-         clientX = e.touches[0].clientX;
-         clientY = e.touches[0].clientY;
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
     } else {
-         clientX = (e as React.MouseEvent).clientX;
-         clientY = (e as React.MouseEvent).clientY;
+      clientX = (e as React.MouseEvent).clientX;
+      clientY = (e as React.MouseEvent).clientY;
     }
 
     return {
-        x: (clientX - rect.left) * scaleX,
-        y: (clientY - rect.top) * scaleY
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY
     };
   };
 
@@ -91,7 +84,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     const coords = getCoords(e);
     ctx.lineTo(coords.x, coords.y);
     ctx.stroke();
@@ -112,133 +105,129 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
 
   const handleSave = () => {
     if (!signerName.trim()) {
-        alert("Please enter your name.");
-        return;
+      alert("Please enter your name.");
+      return;
     }
 
     if (mode === 'draw') {
-        const canvas = canvasRef.current;
-        if (canvas) {
-            const dataUrl = canvas.toDataURL();
-            onSave({
-                type: 'draw',
-                data: dataUrl,
-                name: signerName,
-                date: new Date().toISOString()
-            });
-            setHasSignature(true);
-        }
-    } else {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const dataUrl = canvas.toDataURL();
         onSave({
-            type: 'type',
-            data: signerName,
-            name: signerName,
-            date: new Date().toISOString()
+          type: 'draw',
+          data: dataUrl,
+          name: signerName,
+          date: new Date().toISOString()
         });
         setHasSignature(true);
+      }
+    } else {
+      onSave({
+        type: 'type',
+        data: signerName,
+        name: signerName,
+        date: new Date().toISOString()
+      });
+      setHasSignature(true);
     }
   };
 
   // High contrast white background for inputs
   const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition-shadow font-medium";
-  const nameLocked = Boolean(signerName) || Boolean(externalName) || readOnly;
-
   return (
     <div className="border rounded-lg p-4 bg-white shadow-sm">
       <div className="flex justify-between items-center mb-2">
         <label className="block text-sm font-bold text-gray-700">{label}</label>
         {!hasSignature && !readOnly && (
-            <div className="flex space-x-2">
+          <div className="flex space-x-2">
             <button
-                type="button"
-                onClick={() => setMode('draw')}
-                className={`p-1 rounded ${mode === 'draw' ? 'bg-brand-100 text-brand-700' : 'text-gray-500'}`}
-                title="Draw Signature"
+              type="button"
+              onClick={() => setMode('draw')}
+              className={`p-1 rounded ${mode === 'draw' ? 'bg-brand-100 text-brand-700' : 'text-gray-500'}`}
+              title="Draw Signature"
             >
-                <PenTool size={16} />
+              <PenTool size={16} />
             </button>
             <button
-                type="button"
-                onClick={() => setMode('type')}
-                className={`p-1 rounded ${mode === 'type' ? 'bg-brand-100 text-brand-700' : 'text-gray-500'}`}
-                title="Type Signature"
+              type="button"
+              onClick={() => setMode('type')}
+              className={`p-1 rounded ${mode === 'type' ? 'bg-brand-100 text-brand-700' : 'text-gray-500'}`}
+              title="Type Signature"
             >
-                <Type size={16} />
+              <Type size={16} />
             </button>
-            </div>
+          </div>
         )}
       </div>
 
       {hasSignature ? (
-          <div className="p-4 bg-green-50 border border-green-100 rounded text-center">
-              <Check className="mx-auto text-green-600 mb-2" size={24} />
-              <p className="text-green-800 font-bold">Signed by: {signerName}</p>
-              <p className="text-xs text-green-600">{new Date().toLocaleString()}</p>
-              {mode === 'type' ? (
-                  <p className="text-lg font-script mt-2 italic">{signerName}</p>
-              ) : (
-                  <img src={initialValue?.data || ''} alt="Signature" className="h-16 mx-auto mt-2" />
-              )}
-              {!readOnly && (
-                <button onClick={() => { setHasSignature(false); clear(); }} className="mt-2 text-xs text-red-500 font-bold underline no-print">Clear / Re-sign</button>
-              )}
-          </div>
+        <div className="p-4 bg-green-50 border border-green-100 rounded text-center">
+          <Check className="mx-auto text-green-600 mb-2" size={24} />
+          <p className="text-green-800 font-bold">Signed by: {signerName}</p>
+          <p className="text-xs text-green-600">{new Date().toLocaleString()}</p>
+          {mode === 'type' ? (
+            <p className="text-lg font-script mt-2 italic">{signerName}</p>
+          ) : (
+            <img src={initialValue?.data || ''} alt="Signature" className="h-16 mx-auto mt-2" />
+          )}
+          {!readOnly && (
+            <button onClick={() => { setHasSignature(false); clear(); }} className="mt-2 text-xs text-red-500 font-bold underline no-print">Clear / Re-sign</button>
+          )}
+        </div>
       ) : readOnly ? (
-          <div className="p-4 bg-gray-50 border border-gray-200 rounded text-center">
-              <p className="text-gray-400 text-sm font-semibold italic">Awaiting signature</p>
-          </div>
+        <div className="p-4 bg-gray-50 border border-gray-200 rounded text-center">
+          <p className="text-gray-400 text-sm font-semibold italic">Awaiting signature</p>
+        </div>
       ) : (
-          <>
-             <div className="mb-3">
-                 <input
-                    type="text"
-                    value={signerName}
-                    onChange={(e) => !nameLocked && setSignerName(e.target.value)}
-                    placeholder="Enter Full Name (Required)"
-                    className={inputClass}
-                    readOnly={nameLocked}
-                    disabled={nameLocked}
-                />
-             </div>
+        <>
+          <div className="mb-3">
+            <input
+              type="text"
+              value={signerName}
+              onChange={(e) => setSignerName(e.target.value)}
+              placeholder="Enter your full name"
+              className={inputClass}
+            />
+          </div>
 
-            {mode === 'draw' ? (
-                <canvas
-                ref={canvasRef}
-                width={300}
-                height={150}
-                className="border border-gray-300 rounded w-full touch-none bg-white cursor-crosshair"
-                style={{ touchAction: 'none' }}
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
-                onTouchStart={startDrawing}
-                onTouchMove={draw}
-                onTouchEnd={stopDrawing}
-                />
-            ) : (
-                <div className="p-8 text-center bg-white border border-dashed border-gray-300 rounded text-gray-400 italic">
-                    Type your name above to sign
-                </div>
-            )}
-
-            <div className="flex justify-end space-x-2 mt-2">
-                <button
-                type="button"
-                onClick={clear}
-                className="px-3 py-1 text-xs text-gray-600 font-bold hover:text-red-600 flex items-center"
-                >
-                <Eraser size={12} className="mr-1" /> Clear
-                </button>
-                <button
-                type="button"
-                onClick={handleSave}
-                className="px-4 py-1 text-sm bg-brand-600 text-white font-bold rounded hover:bg-brand-700 shadow-sm transition-colors"
-                >
-                Confirm Signature
-                </button>
+          {mode === 'draw' ? (
+            <canvas
+              ref={canvasRef}
+              width={300}
+              height={150}
+              className="border border-gray-300 rounded w-full touch-none bg-white cursor-crosshair"
+              style={{ touchAction: 'none' }}
+              onMouseDown={startDrawing}
+              onMouseMove={draw}
+              onMouseUp={stopDrawing}
+              onMouseLeave={stopDrawing}
+              onTouchStart={startDrawing}
+              onTouchMove={draw}
+              onTouchEnd={stopDrawing}
+            />
+          ) : (
+            <div className="p-8 text-center bg-white border border-dashed border-gray-300 rounded text-gray-400 italic">
+              Type your name above to sign
             </div>
-          </>
+          )}
+
+          <div className="flex justify-end space-x-2 mt-2">
+            <button
+              type="button"
+              onClick={clear}
+              className="px-3 py-1 text-xs text-gray-600 font-bold hover:text-red-600 flex items-center"
+            >
+              <Eraser size={12} className="mr-1" /> Clear
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="px-4 py-1 text-sm bg-brand-600 text-white font-bold rounded hover:bg-brand-700 shadow-sm transition-colors"
+            >
+              Confirm Signature
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

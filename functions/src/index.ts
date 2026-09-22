@@ -12,6 +12,13 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 const CX_API_BASE = "https://au.itwocx.com/api/26.08";
+const CX_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36";
+const CX_DEFAULT_HEADERS: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": CX_USER_AGENT
+};
+const FORCE_FRESH_CX_LOGIN = true;
 
 // ============================================================================
 // 📊 PERMIT TYPE CONFIG TABLE (CX Dictionary)
@@ -58,14 +65,10 @@ const getGlobalCXSession = async (projectCode: string) => {
     }
 };
 
-const getBaseOptions = (sessionKey: string, method: string = "GET") => {
-    const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    };
-    if (sessionKey) {
-        headers["UserToken"] = sessionKey;
-        headers["Authorization"] = `Bearer ${sessionKey}`;
+const getBaseOptions = (sessionToken: string, method: string = "GET") => {
+    const headers: Record<string, string> = { ...CX_DEFAULT_HEADERS };
+    if (sessionToken) {
+        headers["key"] = sessionToken;
     }
     return { method, headers };
 };
@@ -97,16 +100,24 @@ const clearCXSession = async () => {
     await db.collection('settings').doc('cx_auth').delete();
 };
 
+const getCXProjectCode = (collectionName: string) => collectionName === 'permits_demo' ? 'EB-DEMO' : 'EB';
+
 export const performCXLogin = async (email?: string, password?: string): Promise<any> => {
     const targetEmail = email || process.env.CX_MASTER_EMAIL;
     const targetPassword = password || process.env.CX_MASTER_PASSWORD;
     const configuredToken = process.env.CX_MASTER_TOKEN || process.env.VITE_CX_MASTER_TOKEN;
 
     if (targetEmail && targetPassword) {
-        const loginRes = await fetch(`${CX_API_BASE}/Api/Login/ByEmail`, {
+        const loginPayload = {
+            Email: targetEmail,
+            Password: targetPassword,
+        };
+        const targetUrl = `${CX_API_BASE}/Api/Login/ByEmail`;
+        const headers = { ...CX_DEFAULT_HEADERS };
+        const loginRes = await fetch(targetUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ Email: targetEmail, Password: targetPassword })
+            headers,
+            body: JSON.stringify(loginPayload)
         });
         const loginData = await safeParseJSON(loginRes, 'v26.08 Login');
         const sessionKey = loginData?.SessionKey || loginData?.sessionKey || loginData?.AccessToken || loginData?.accessToken || loginData?.Token || loginData?.token || loginData?.Key || loginData?.key;
@@ -130,7 +141,7 @@ const refreshCXSession = async (projectCode: string) => {
 // ============================================================================
 // ASYNC PERMIT SYNC WORKER
 // ============================================================================
-const processPendingPermitSync = async (
+export const processPendingPermitSync = async (
     permitId: string,
     newValue: any,
     previousValue: any,
@@ -159,7 +170,7 @@ const processPendingPermitSync = async (
         action = 'Issuance';
     }
 
-    let targetProjectCode = 'EB-DEMO';
+    const targetProjectCode = getCXProjectCode(collectionName);
 
     try {
         const permitNumber = newValue.itwocxNumber || newValue.permitNumber;
@@ -180,38 +191,34 @@ const processPendingPermitSync = async (
             return;
         }
 
-        const settingsDoc = await db.collection('settings').doc('config').get();
-        const configData = settingsDoc.data();
+        const searchUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/Search`;
+        const searchPayload = {
+            CriterionList: {
+                cx_reference: exactCXReference
+            },
+            MaxNumber: 1
+        };
 
-        if (newValue.env === 'LIVE' || newValue.env === 'live') {
-            targetProjectCode = 'EB';
-        } else if (newValue.env === 'DEMO' || newValue.env === 'demo' || newValue.environment === 'demo') {
-            targetProjectCode = 'EB-DEMO';
-        } else {
-            const isGlobalDemo = configData?.environment === 'demo_mode' || configData?.acceptLiveTraffic === false;
-            targetProjectCode = isGlobalDemo ? 'EB-DEMO' : 'EB';
-        }
-
-        const getUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/GetByDocCode?code=${encodeURIComponent('PF#' + paddedNumber)}`;
-
-        let sessionKey = await getGlobalCXSession(targetProjectCode);
+        let sessionKey = FORCE_FRESH_CX_LOGIN ? null : await getGlobalCXSession(targetProjectCode);
 
         if (!sessionKey) {
             console.log(`[CX Sync] Session Key missing. Performing background login for ${targetProjectCode}...`);
             sessionKey = await refreshCXSession(targetProjectCode);
         }
 
-        let cxRawResponse: any;
+        let searchResponse: any = {};
         let refreshedAfterExpiry = false;
-        for (let getAttempt = 0; getAttempt < 2; getAttempt++) {
-            const getRes = await fetch(getUrl, getBaseOptions(sessionKey as string, "GET"));
-            const responseText = await getRes.text();
+        for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
+            const searchOptions: any = getBaseOptions(sessionKey as string, "POST");
+            searchOptions.body = JSON.stringify(searchPayload);
+            const searchRes = await fetch(searchUrl, searchOptions);
+            const responseText = await searchRes.text();
             const trimmedResponse = responseText.trim().toLowerCase();
             const isHtmlResponse = trimmedResponse.startsWith('<html') || trimmedResponse.startsWith('<!doctype html');
-            const isRejectedResponse = getRes.status === 403 || isHtmlResponse;
+            const isRejectedResponse = searchRes.status === 403 || isHtmlResponse;
             if (isRejectedResponse) {
                 if (!refreshedAfterExpiry) {
-                    console.warn(`[CX Sync] Session token rejected for ${targetProjectCode}. Refreshing and retrying GET once.`);
+                    console.warn(`[CX Sync] Session token rejected for ${targetProjectCode}. Refreshing and retrying Document Search once.`);
                     await clearCXSession();
                     sessionKey = await refreshCXSession(targetProjectCode);
                     refreshedAfterExpiry = true;
@@ -223,41 +230,44 @@ const processPendingPermitSync = async (
             try {
                 parsedResponse = JSON.parse(responseText);
             } catch (parseError) {
-                const looksExpired = getRes.status === 401 || /expired|unauthorized|invalid token|session/i.test(responseText);
+                const looksExpired = searchRes.status === 401 || /expired|unauthorized|invalid token|session/i.test(responseText);
                 if (!refreshedAfterExpiry && looksExpired) {
-                    console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Refreshing and retrying GET once.`);
+                    console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Refreshing and retrying Document Search once.`);
                     await clearCXSession();
                     sessionKey = await refreshCXSession(targetProjectCode);
                     refreshedAfterExpiry = true;
                     continue;
                 }
-                throw new Error(`[GET for Async ${action}] iTwoCX returned non-JSON response (${getRes.status}). Fragment: ${responseText.substring(0, 100)}...`);
+                throw new Error(`[Document Search for Async ${action}] iTwoCX returned non-JSON response (${searchRes.status}). Fragment: ${responseText.substring(0, 100)}...`);
             }
 
             const responseMessage = JSON.stringify(parsedResponse);
-            const looksExpired = getRes.status === 401 || /expired|unauthorized|invalid token|session/i.test(responseMessage);
+            const looksExpired = searchRes.status === 401 || /expired|unauthorized|invalid token|session/i.test(responseMessage);
             if (!refreshedAfterExpiry && looksExpired) {
-                console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Refreshing and retrying GET once.`);
+                console.warn(`[CX Sync] Token expired for ${targetProjectCode}. Refreshing and retrying Document Search once.`);
                 await clearCXSession();
                 sessionKey = await refreshCXSession(targetProjectCode);
                 refreshedAfterExpiry = true;
                 continue;
             }
 
-            if (!getRes.ok) {
-                throw new Error(`GET for Async ${action} failed with HTTP ${getRes.status}: ${responseText.substring(0, 200)}`);
+            if (!searchRes.ok) {
+                throw new Error(`Document Search for Async ${action} failed with HTTP ${searchRes.status}: ${responseText.substring(0, 200)}`);
             }
-            cxRawResponse = parsedResponse;
+            searchResponse = parsedResponse;
             break;
         }
 
-        // GetByDocCode returns a paged response; only its first item is the document model.
-        const cxDoc: any = Array.isArray(cxRawResponse?.Items) ? cxRawResponse.Items[0] : undefined;
-
+        const searchResultItem: any = Array.isArray(searchResponse) ? searchResponse[0] : searchResponse?.Items?.[0];
+        const documentId = searchResultItem && typeof searchResultItem === 'object' ? searchResultItem.Id : searchResultItem;
+        const cxDoc: any = searchResultItem && typeof searchResultItem === 'object' ? searchResultItem : { Id: documentId };
         const permitRef = `PF#${paddedNumber}`;
 
         if (!cxDoc || typeof cxDoc !== 'object') {
-            throw new Error(`GET SUCCESS but 0 ITEMS FOUND. Searched URL: /Api/${targetProjectCode}/Document/GetByDocCode?code=${encodeURIComponent(exactCXReference)}`);
+            throw new Error(`Document Search succeeded but 0 ITEMS FOUND for ${permitRef}.`);
+        }
+        if (!documentId) {
+            throw new Error(`Document Search returned a document without an Id for ${permitRef}.`);
         }
 
         console.log(`[SONAR] CX DOC DATA FOR ${permitRef} [TYPE: ${rawType}]:`, JSON.stringify({
@@ -266,41 +276,70 @@ const processPendingPermitSync = async (
             ActionCodes: cxDoc.ActionCodes || "N/A"
         }));
 
-        if (action === 'Closure' && newValue.pdfBackupUrl) {
-            try {
-                console.log(`[DLQ] Downloading PDF from Firebase to upload to CX...`);
-                const pdfRes = await fetch(newValue.pdfBackupUrl);
-                const arrayBuffer = await pdfRes.arrayBuffer();
-                const base64Pdf = Buffer.from(arrayBuffer).toString('base64');
+        if (action === 'Closure') {
+            if (!newValue.pdfBackupUrl) {
+                throw new Error(`Cannot close ${permitRef}: pdfBackupUrl is missing.`);
+            }
 
-                const uploadUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Attachment/Upload?documentId=${cxDoc.Id}`;
+            console.log(`[DLQ] Downloading PDF from Firebase to upload to CX...`);
+            const pdfRes = await fetch(newValue.pdfBackupUrl);
+            if (!pdfRes.ok) {
+                throw new Error(`Failed to download closure PDF: HTTP ${pdfRes.status}.`);
+            }
+            const pdfBuffer = await pdfRes.arrayBuffer();
+            const uploadUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Attachment/Upload?documentId=` + encodeURIComponent(String(documentId));
+            const fileName = `${typeConfig.pdfPrefix}_${paddedNumber}_Closed.pdf`;
+            let attachmentUploaded = false;
+            let refreshedForUpload = false;
 
-                const uploadPayload = {
-                    Name: `${typeConfig.pdfPrefix}_${paddedNumber}_Closed.pdf`,
-                    ChunkId: 1,
-                    ChunkTotal: 1,
-                    Content: base64Pdf
-                };
+            for (let uploadAttempt = 0; uploadAttempt < 2; uploadAttempt++) {
+                const formData = new FormData();
+                formData.append('Name', fileName);
+                formData.append('ChunkId', '1');
+                formData.append('ChunkTotal', '1');
+                formData.append('Content', new Blob([pdfBuffer], { type: 'application/pdf' }), fileName);
 
                 const uploadOptions: any = getBaseOptions(sessionKey as string, "POST");
-                uploadOptions.body = JSON.stringify(uploadPayload);
+                delete uploadOptions.headers['Content-Type'];
+                uploadOptions.body = formData;
 
                 const uploadRes = await fetch(uploadUrl, uploadOptions);
-                const uploadData = await safeParseJSON(uploadRes, `POST Attachment`);
-
-                if (uploadData && uploadData.IsSuccess === false) {
-                    console.warn(`[DLQ] CX Attachment Upload Warning:`, uploadData.ErrorMessages);
-                } else {
-                    console.log(`[DLQ] ✅ Successfully uploaded PDF to CX for ${permitRef}`);
+                const uploadText = await uploadRes.text();
+                const uploadTrimmed = uploadText.trim().toLowerCase();
+                const uploadIsHtml = uploadTrimmed.startsWith('<html') || uploadTrimmed.startsWith('<!doctype html');
+                if (uploadRes.status === 401 || uploadRes.status === 403 || uploadIsHtml) {
+                    if (!refreshedForUpload) {
+                        await clearCXSession();
+                        sessionKey = await refreshCXSession(targetProjectCode);
+                        refreshedForUpload = true;
+                        continue;
+                    }
+                    throw new Error('Session Token expired/rejected during CX PDF upload.');
                 }
-            } catch (pdfErr: any) {
-                console.error("[DLQ] Failed to upload PDF to CX:", pdfErr.message);
+                if (!uploadRes.ok) {
+                    throw new Error(`CX PDF upload failed with HTTP ${uploadRes.status}: ${uploadText.substring(0, 200)}`);
+                }
+
+                let uploadData: any;
+                try {
+                    uploadData = JSON.parse(uploadText);
+                } catch {
+                    throw new Error(`CX PDF upload returned non-JSON response: ${uploadText.substring(0, 200)}`);
+                }
+                if (uploadData?.IsSuccess === false) {
+                    throw new Error(`CX PDF upload rejected: ${uploadData.ErrorMessages?.join(', ') || 'unknown error'}`);
+                }
+                attachmentUploaded = true;
+                break;
             }
+
+            if (!attachmentUploaded) {
+                throw new Error(`CX PDF upload did not complete for ${permitRef}.`);
+            }
+            console.log(`[DLQ] Successfully uploaded PDF to CX for ${permitRef}; proceeding to CLOSE.`);
         }
 
         const updateUrl = `${CX_API_BASE}/Api/${targetProjectCode}/Document/Update`;
-        const options: any = getBaseOptions(sessionKey as string, "PUT");
-
         const updatePayload: any = JSON.parse(JSON.stringify(cxDoc));
 
         if (action === 'Issuance') {
@@ -311,10 +350,28 @@ const processPendingPermitSync = async (
             updatePayload.ActionCodes = ["CLOSE"];
         }
 
-        options.body = JSON.stringify(updatePayload);
-
-        const updateRes = await fetch(updateUrl, options);
-        const updateData = await safeParseJSON(updateRes, `PUT for Async ${action}`);
+        let updateData: any;
+        let refreshedForUpdate = false;
+        for (let updateAttempt = 0; updateAttempt < 2; updateAttempt++) {
+            const updateOptions: any = getBaseOptions(sessionKey as string, "PUT");
+            updateOptions.body = JSON.stringify(updatePayload);
+            const updateRes = await fetch(updateUrl, updateOptions);
+            try {
+                updateData = await safeParseJSON(updateRes, `PUT for Async ${action}`);
+            } catch (updateError: any) {
+                if (!refreshedForUpdate && (updateRes.status === 401 || updateRes.status === 403 || /Session Token expired|returned HTML/i.test(updateError.message))) {
+                    await clearCXSession();
+                    sessionKey = await refreshCXSession(targetProjectCode);
+                    refreshedForUpdate = true;
+                    continue;
+                }
+                throw updateError;
+            }
+            if (!updateRes.ok) {
+                throw new Error(`PUT for Async ${action} failed with HTTP ${updateRes.status}.`);
+            }
+            break;
+        }
 
         if (updateData && updateData.IsSuccess === false) {
             const errorMessage = updateData.ErrorMessages?.join(', ') || `API rejected the ${action} update for ${permitRef}.`;
@@ -322,7 +379,7 @@ const processPendingPermitSync = async (
         }
 
         await db.collection(collectionName).doc(permitId).update({
-            sync_status: 'synced', syncStatus: 'synced', cxSyncPending: null, cxSyncError: null, sync_error: null, lastSyncedAt: new Date().toISOString()
+            sync_status: 'success', syncStatus: 'success', cxSyncPending: null, cxSyncError: null, sync_error: null, lastSyncedAt: new Date().toISOString()
         });
 
         console.log(`[CX Sync] ✅ Successfully executed ${action} for ${permitRef}`);

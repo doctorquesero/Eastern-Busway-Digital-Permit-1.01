@@ -95,6 +95,9 @@ export interface Permit {
     permitType?: 'excavation' | 'pump';
     status: 'draft' | 'active' | 'closed';
     createdAt: string;
+    issuedDate?: string;
+    commencementDate?: string;
+    endDate?: string;
 
     // Page 1 & 2: Site Plan & Base Details
     location: string;
@@ -145,7 +148,10 @@ export interface Permit {
     handoverLogs: HandoverLog[];
     crewMembers: CrewMember[];
     otherNotes: string;
+    notesAuthor?: string;
+    notesUpdatedAt?: string;
     photos: PermitPhoto[];
+    approverPhoto?: string;
     approverComments?: Record<string, string>;
     issuerComments?: Record<string, string>;
     ceaseWorksRecord?: CeaseWorksRecord;

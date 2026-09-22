@@ -1,6 +1,6 @@
 // ARCHIVO: src/pages/PermitDetail.tsx
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, Trash2, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff, Wifi } from 'lucide-react';
+import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff, Wifi } from 'lucide-react';
 import { Permit, Signature, HandoverLog, DailySignOff, PermitPhoto, CeaseWorksRecord, CrewMember, INITIAL_PART_A, INITIAL_PART_B, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST } from '../types';
 import { getPermitById, savePermit } from '../services/storage';
 import { getUserRole } from '../services/cx';
@@ -15,32 +15,10 @@ import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage'
 import { getAuth } from 'firebase/auth';
 import { sanitizeForFirestore } from '../utils/firestore';
 import { getDisplayNameFromEmail } from '../utils/userNames';
+import { generateId } from '../utils/id';
+import { compressImageToJpeg } from '../utils/image';
 
 interface PermitDetailProps { id: string; onBack: () => void; }
-
-const compressImage = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target?.result as string;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 1000; const MAX_HEIGHT = 1000;
-                let width = img.width; let height = img.height;
-                if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } }
-                else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
-                canvas.width = width; canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx?.drawImage(img, 0, 0, width, height);
-                resolve(canvas.toDataURL('image/jpeg', 0.7));
-            };
-            img.onerror = error => reject(error);
-        };
-        reader.onerror = error => reject(error);
-    });
-};
 
 const loadRemoteImageAsDataUrl = (src: string): Promise<string> => new Promise((resolve, reject) => {
     if (!src) return reject(new Error('Missing image source'));
@@ -130,6 +108,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const userEmail = (currentUser?.email || '').toLowerCase().trim();
     const userName = (currentUser?.displayName || currentUser?.name || getDisplayNameFromEmail(currentUser?.email)).toLowerCase().trim();
+    const currentUserDisplayName = currentUser?.displayName || currentUser?.name || getDisplayNameFromEmail(currentUser?.email) || currentUser?.email || 'Unknown user';
     const userUid = currentUser?.uid || currentUser?.id || '';
 
     const permitReceiverEmail = String(permit?.receiverEmail || permit?.receiver || '').toLowerCase().trim();
@@ -165,8 +144,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const cameraInputRef = useRef<HTMLInputElement>(null);
     const galleryInputRef = useRef<HTMLInputElement>(null);
     const approverCameraRef = useRef<HTMLInputElement>(null);
+    const approverGalleryRef = useRef<HTMLInputElement>(null);
     const dailySignOffUploadRef = useRef<HTMLInputElement>(null);
+    const dailySignOffGalleryRef = useRef<HTMLInputElement>(null);
     const crewRegistrationUploadRef = useRef<HTMLInputElement>(null);
+    const crewRegistrationGalleryRef = useRef<HTMLInputElement>(null);
     const pdfExportRef = useRef<HTMLDivElement>(null);
 
     if (!permit) return <div className="p-12 text-center text-red-600 font-black">Permit Not Found.</div>;
@@ -183,6 +165,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const isSuspended = permit.ceaseWorksRecord?.actionTaken === 'suspended';
     const isHydro = permit.excavationType === 'hydro' || permit.excavationType === 'hand';
     const hasApproverSigned = !!permit.approverSignature?.data;
+    const arePermitDatesLocked = isClosed || isIssued || permit.status === 'active';
 
     const isExecutionBlocked = isIssued && !isHydro && !hasApproverSigned && !isClosed && !isSuspended;
 
@@ -214,6 +197,12 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         syncToFirebase({ ...permit, [field]: value } as Permit);
     };
 
+    const updateCommencementDate = (commencementDate: string) => {
+        if (arePermitDatesLocked) return;
+        const endDate = commencementDate ? new Date(new Date(`${commencementDate}T00:00:00`).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : '';
+        syncToFirebase({ ...permit, commencementDate, endDate });
+    };
+
     const updateChecklist = (listName: 'partAChecklist' | 'receiverChecklist' | 'partBChecklist', itemId: string, field: 'answer' | 'comment', value: string) => {
         if (isClosed) return;
         if (isIssued && (listName === 'partAChecklist' || listName === 'receiverChecklist')) return;
@@ -221,6 +210,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         let currentList = listName === 'partAChecklist' ? partAItems : (listName === 'receiverChecklist' ? receiverItems : partBItems);
         const updatedList = currentList.map(item => item.id === itemId ? { ...item, [field]: value } : item);
         syncToFirebase({ ...permit, [listName]: updatedList } as Permit);
+    };
+
+    const updateApproverComment = (itemId: string, value: string) => {
+        if (hasApproverSigned || isClosed) return;
+        syncToFirebase({ ...permit, approverComments: { ...(permit.approverComments || {}), [itemId]: value } });
     };
 
     const handleIssuePermit = async () => {
@@ -265,7 +259,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
         try {
             const file = e.target.files[0];
-            const compressedDataUrl = await compressImage(file);
+            const compressedDataUrl = await compressImageToJpeg(file);
             const cloudUrl = await uploadImageToStorage(compressedDataUrl, `${field}_${permit.itwocxNumber || permit.permitNumber || 'permit'}_${Date.now()}.jpg`);
             await syncToFirebase({ ...permit, [field]: cloudUrl } as Permit);
         } catch (err) {
@@ -280,9 +274,16 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setIsUploadingApproverPhoto(true);
         try {
             const file = e.target.files[0];
-            const compressedDataUrl = await compressImage(file);
+            const compressedDataUrl = await compressImageToJpeg(file);
             const cloudUrl = await uploadImageToStorage(compressedDataUrl, `approver_${permit.itwocxNumber}_${Date.now()}.jpg`);
-            await syncToFirebase({ ...permit, approverPhoto: cloudUrl } as any);
+            const approverPhoto: PermitPhoto = {
+                id: generateId(),
+                url: cloudUrl,
+                caption: 'Approver site inspection',
+                uploadedBy: currentUserDisplayName,
+                date: new Date().toISOString()
+            };
+            await syncToFirebase({ ...permit, approverPhoto: cloudUrl, photos: [...(permit.photos || []), approverPhoto] });
         } catch (err) {
             alert("Error uploading approver photo to cloud. Check internet connection.");
         } finally { setIsUploadingApproverPhoto(false); e.target.value = ''; }
@@ -296,14 +297,14 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const handleSaveDailyLog = async () => {
         if (isClosed || !dailyDate || !dailyRecSig || !dailyOpSig || !dailySpotSig) { alert("Missing signatures or Permit is Closed."); return; }
-        const newLog: DailySignOff = { id: crypto.randomUUID(), date: dailyDate, receiverSig: dailyRecSig, excavatorSig: dailyOpSig, spotterSig: dailySpotSig };
+        const newLog: DailySignOff = { id: generateId(), date: dailyDate, receiverSig: dailyRecSig, excavatorSig: dailyOpSig, spotterSig: dailySpotSig };
         syncToFirebase({ ...permit, dailyLogs: [...(permit.dailyLogs || []), newLog] } as Permit);
         setDailyRecSig(null); setDailyOpSig(null); setDailySpotSig(null);
     };
 
     const handleRegisterCrew = async (sig: Signature) => {
         if (isClosed || !newCrewName.trim()) return;
-        const newMember: CrewMember = { id: crypto.randomUUID(), name: newCrewName, role: newCrewRole, signature: sig, dateInducted: new Date(newCrewDate + 'T08:00:00').toISOString() };
+        const newMember: CrewMember = { id: generateId(), name: newCrewName, role: newCrewRole, signature: sig, dateInducted: new Date(newCrewDate + 'T08:00:00').toISOString() };
         syncToFirebase({ ...permit, crewMembers: [...(permit.crewMembers || []), newMember] } as Permit);
         setNewCrewName('');
     };
@@ -312,7 +313,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         if (isClosed || !handoverReceiver || !handoverSignature) return;
         if (!isReceiver) { alert("Only an official Receiver can accept a handover."); return; }
         if (currentHandovers.length >= 7) { alert("Max handovers reached."); return; }
-        const newHandover: HandoverLog = { id: crypto.randomUUID(), date: new Date().toISOString(), receiverName: handoverReceiver, signature: handoverSignature, initial: handoverSignature };
+        const newHandover: HandoverLog = { id: generateId(), date: new Date().toISOString(), receiverName: handoverReceiver, signature: handoverSignature, initial: handoverSignature };
         syncToFirebase({ ...permit, handoverLogs: [...currentHandovers, newHandover] } as Permit);
         setHandoverReceiver(''); setHandoverSignature(null); setHandoverChecks({});
     };
@@ -435,9 +436,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setIsUploadingPhoto(true);
         try {
             const file = e.target.files[0];
-            const compressedDataUrl = await compressImage(file);
+            const compressedDataUrl = await compressImageToJpeg(file);
             const cloudUrl = await uploadImageToStorage(compressedDataUrl, `detail_${permit.itwocxNumber}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '')}`);
-            const newPhoto: PermitPhoto = { id: crypto.randomUUID(), url: cloudUrl, caption: photoCaption || file.name, uploadedBy: 'User', date: new Date().toISOString() };
+            const newPhoto: PermitPhoto = { id: generateId(), url: cloudUrl, caption: photoCaption || file.name, uploadedBy: 'User', date: new Date().toISOString() };
             syncToFirebase({ ...permit, photos: [...(permit.photos || []), newPhoto] } as Permit);
             setPhotoCaption('');
         } catch (err) { alert("Error uploading photo to cloud."); } finally { setIsUploadingPhoto(false); e.target.value = ''; }
@@ -458,7 +459,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
         setIsSubmitting(true);
 
-        const newRecord: CeaseWorksRecord = { id: crypto.randomUUID(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
+        const newRecord: CeaseWorksRecord = { id: generateId(), date: new Date().toISOString(), issuerName: ceaseIssuerName, issuerSignature: sig, affectedItemNumber: ceaseItem as any, actionTaken: ceaseAction as any };
         let updatedPermit: any = { ...permit, ceaseWorksRecord: newRecord };
 
         if (ceaseAction === 'cancelled') {
@@ -607,6 +608,9 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
                                     <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location</p><input type="text" className={inputClass} value={permit.location} onChange={e => updateField('location', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Issued Date</p><input type="date" className={inputClass} value={permit.issuedDate || ''} onChange={e => updateField('issuedDate', e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Commencement Date (Start Date)</p><input type="date" className={inputClass} value={permit.commencementDate || ''} onChange={e => updateCommencementDate(e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit End Date</p><input type="date" className={inputClass} value={permit.endDate || ''} onChange={e => updateField('endDate', e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
                                     <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Excavation Type</p><select className={inputClass} value={permit.excavationType} onChange={e => updateField('excavationType', e.target.value)} disabled={isIssued || isClosed}><option value="mechanical">Mechanical Excavation</option><option value="hydro">Hydro Excavation</option><option value="hand">Hand Digging</option></select></div>
                                     <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works</p><textarea className={`${inputClass} h-20`} value={permit.scopeOfWorks} onChange={e => updateField('scopeOfWorks', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed}></textarea></div>
                                 </div>
@@ -747,6 +751,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                         <div key={item.id} className="flex flex-col md:flex-row gap-4 border-b border-gray-100 pb-4 last:border-0">
                                             <div className="flex-1"><span className="font-black text-blue-600 mr-2">{item.id}.</span><span className="text-sm font-bold text-gray-800 leading-relaxed">{item.question}</span></div>
                                             <div className="w-full md:w-40 shrink-0"><select className={inputClass} value={item.answer || ''} onChange={(e) => updateChecklist('partBChecklist', item.id, 'answer', e.target.value)} disabled={hasApproverSigned || isClosed}><option value="">- PENDING -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></select></div>
+                                            <textarea className={`${inputClass} w-full md:w-64 min-h-20 resize-y`} value={permit.approverComments?.[item.id] || ''} onChange={(e) => updateApproverComment(item.id, e.target.value)} disabled={hasApproverSigned || isClosed} placeholder="Approver comment..." aria-label={`Approver comment for item ${item.id}`} />
                                         </div>
                                     ))}
                                 </div>
@@ -760,18 +765,20 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                         {(permit as any).approverPhoto ? (
                                             <div className="relative inline-block mt-2">
                                                 <img src={(permit as any).approverPhoto} className="h-32 w-32 object-cover rounded-xl border-4 border-green-500 shadow-md" alt="Inspection" />
-                                                {!hasApproverSigned && !isClosed && (
-                                                    <button onClick={() => syncToFirebase({ ...permit, approverPhoto: null } as any)} className="absolute -top-3 -right-3 bg-red-600 hover:bg-red-700 text-white p-2 rounded-full shadow-lg transition-transform hover:scale-110"><Trash2 size={16} /></button>
-                                                )}
                                                 <p className="text-[10px] font-black text-green-600 mt-3 uppercase tracking-widest flex justify-center items-center gap-1"><CheckCircle size={14} /> Photo Attached</p>
                                             </div>
                                         ) : (
                                             <div className="mt-2">
                                                 <button onClick={() => approverCameraRef.current?.click()} disabled={isUploadingApproverPhoto || hasApproverSigned || isClosed || !isOnline} className={`bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-black text-sm uppercase shadow-lg flex items-center justify-center gap-3 w-full transition-all ${!isOnline ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}>
                                                     {isUploadingApproverPhoto ? <Loader2 className="animate-spin" size={20} /> : <Camera size={20} />}
-                                                    {isUploadingApproverPhoto ? 'Uploading Securely...' : 'Take Inspection Photo'}
+                                                    {isUploadingApproverPhoto ? 'Uploading Securely...' : 'Take Photo'}
+                                                </button>
+                                                <button onClick={() => approverGalleryRef.current?.click()} disabled={isUploadingApproverPhoto || hasApproverSigned || isClosed || !isOnline} className={`mt-3 bg-white border-2 border-blue-200 text-blue-900 hover:bg-blue-50 px-6 py-4 rounded-xl font-black text-sm uppercase shadow-sm flex items-center justify-center gap-3 w-full transition-all ${!isOnline ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}>
+                                                    {isUploadingApproverPhoto ? <Loader2 className="animate-spin" size={20} /> : <ImageIcon size={20} />}
+                                                    Upload from Gallery
                                                 </button>
                                                 <input ref={approverCameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleApproverPhotoUpload} />
+                                                <input ref={approverGalleryRef} type="file" accept="image/*" className="hidden" onChange={handleApproverPhotoUpload} />
                                                 <p className="text-[10px] text-red-600 font-bold mt-3 uppercase tracking-wide bg-red-50 py-1.5 rounded-md border border-red-100 shadow-inner">⚠️ Required before signing</p>
                                             </div>
                                         )}
@@ -859,7 +866,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                             <h3 className="font-black text-xl text-blue-900 uppercase">Photographic Evidence</h3>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-6 mb-8">
-                            {(permit.photos || []).map(photo => (<div key={photo.id} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm bg-white relative animate-fade-in"><img src={photo.url} className="aspect-square object-cover w-full" /><div className="p-3 border-t"><p className="text-[10px] font-black uppercase text-gray-700 line-clamp-2" title={photo.caption}>{photo.caption || 'No caption'}</p></div>{!isClosed && <button onClick={() => syncToFirebase({ ...permit, photos: permit.photos?.filter(p => p.id !== photo.id) } as Permit)} className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full shadow-lg"><Trash2 size={14} /></button>}</div>))}
+                            {(permit.photos || []).map(photo => (<div key={photo.id} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm bg-white relative animate-fade-in"><img src={photo.url} className="aspect-square object-cover w-full" /><div className="p-3 border-t"><p className="text-[10px] font-black uppercase text-gray-700 line-clamp-2" title={photo.caption}>{photo.caption || 'No caption'}</p></div></div>))}
                         </div>
                         {!isClosed && (
                             <div className="border-4 border-dashed border-gray-300 p-8 rounded-[2rem] text-center bg-gray-50/50 hover:bg-gray-50 transition-colors animate-fade-in relative z-10">
@@ -868,8 +875,12 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     <button onClick={() => cameraInputRef.current?.click()} disabled={isUploadingPhoto || !isOnline} className={`text-white px-8 py-4 rounded-xl font-black uppercase shadow-lg flex items-center justify-center gap-2 transition-all ${!isOnline ? 'bg-gray-400 opacity-50 cursor-not-allowed' : 'bg-blue-800 hover:bg-blue-900 hover:scale-[1.02]'}`}>
                                         {isUploadingPhoto ? <Loader2 className="animate-spin" /> : <Camera size={20} />} Take / Upload Photo
                                     </button>
+                                    <button onClick={() => galleryInputRef.current?.click()} disabled={isUploadingPhoto || !isOnline} className={`text-blue-900 bg-white border-2 border-blue-200 px-8 py-4 rounded-xl font-black uppercase shadow-sm flex items-center justify-center gap-2 transition-all ${!isOnline ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50 hover:scale-[1.02]'}`}>
+                                        {isUploadingPhoto ? <Loader2 className="animate-spin" /> : <ImageIcon size={20} />} Upload from Gallery
+                                    </button>
                                 </div>
                                 <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
+                                <input ref={galleryInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
                             </div>
                         )}
                     </div>
@@ -912,8 +923,18 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                             )}
                         </div>
                         <h3 className="font-black text-xl mb-2 text-blue-900 border-b-2 border-blue-200 pb-2 uppercase mt-10">Job Notes</h3>
-                        <textarea className={`${inputClass} mb-4 h-32 text-sm leading-relaxed`} value={otherNotes} onChange={e => setOtherNotes(e.target.value)} disabled={isClosed} placeholder="Additional job details, incidents, toolbox meeting notes, or non-conditional comments..."></textarea>
-                        {!isClosed && <button onClick={() => { syncToFirebase({ ...permit, otherNotes } as Permit); alert("Notes saved successfully."); }} className="bg-blue-800 hover:bg-blue-900 text-white px-8 py-3 rounded-xl font-black text-xs uppercase shadow-md transition-all hover:scale-[1.02]">Save Notes</button>}
+                        <textarea className={`${inputClass} mb-4 h-32 text-sm leading-relaxed`} value={otherNotes} onChange={e => setOtherNotes(e.target.value)} disabled={isClosed || Boolean(permit.otherNotes?.trim())} readOnly={Boolean(permit.otherNotes?.trim())} placeholder="Additional job details, incidents, toolbox meeting notes, or non-conditional comments..."></textarea>
+                        <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900">
+                            <span className="font-black uppercase">Last updated by:</span>{' '}
+                            {String((permit as any).notesAuthor || (permit as any).noteAuthor || currentUserDisplayName || 'Unknown user')}
+                            {' '}<span className="font-black uppercase">on</span>{' '}
+                            {(() => {
+                                const rawDate = (permit as any).notesUpdatedAt || (permit as any).noteUpdatedAt || (permit as any).updatedAt || permit.createdAt;
+                                const parsedDate = rawDate ? new Date(rawDate) : null;
+                                return parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate.toLocaleString() : 'Date unavailable';
+                            })()}
+                        </div>
+                        {!isClosed && !permit.otherNotes?.trim() && otherNotes.trim() && <button onClick={() => { const notesUpdatedAt = new Date().toISOString(); syncToFirebase({ ...permit, otherNotes, notesAuthor: currentUserDisplayName, notesUpdatedAt } as Permit); alert("Notes saved successfully."); }} className="bg-blue-800 hover:bg-blue-900 text-white px-8 py-3 rounded-xl font-black text-xs uppercase shadow-md transition-all hover:scale-[1.02]">Save Notes</button>}
                     </div>
 
                     <div className={activeTab === 'closure' ? 'block animate-fade-in' : 'hidden'}>
@@ -939,14 +960,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                 {permit.dailySignOffUrl ? (
                                                     <div className="space-y-2">
                                                         <img src={permit.dailySignOffUrl} alt="Daily sign off evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
-                                                        <button onClick={() => syncToFirebase({ ...permit, dailySignOffUrl: undefined } as Permit)} className="w-full bg-red-100 text-red-700 font-bold text-xs uppercase py-2 rounded-lg hover:bg-red-200">Remove</button>
                                                     </div>
                                                 ) : (
-                                                    <button onClick={() => dailySignOffUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}>
-                                                        Upload Daily Sign Off
-                                                    </button>
+                                                    <div className="space-y-2">
+                                                        <button onClick={() => dailySignOffUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}><Camera size={14} className="inline mr-2" />Take Photo</button>
+                                                        <button onClick={() => dailySignOffGalleryRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'} font-black uppercase text-xs py-3 rounded-xl`}><ImageIcon size={14} className="inline mr-2" />Upload from Gallery</button>
+                                                    </div>
                                                 )}
                                                 <input ref={dailySignOffUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'dailySignOffUrl')} />
+                                                <input ref={dailySignOffGalleryRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'dailySignOffUrl')} />
                                             </div>
 
                                             <div className="border-2 border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50">
@@ -954,14 +976,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                 {permit.crewRegistrationUrl ? (
                                                     <div className="space-y-2">
                                                         <img src={permit.crewRegistrationUrl} alt="Crew registration evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
-                                                        <button onClick={() => syncToFirebase({ ...permit, crewRegistrationUrl: undefined } as Permit)} className="w-full bg-red-100 text-red-700 font-bold text-xs uppercase py-2 rounded-lg hover:bg-red-200">Remove</button>
                                                     </div>
                                                 ) : (
-                                                    <button onClick={() => crewRegistrationUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}>
-                                                        Upload Crew Registration
-                                                    </button>
+                                                    <div className="space-y-2">
+                                                        <button onClick={() => crewRegistrationUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}><Camera size={14} className="inline mr-2" />Take Photo</button>
+                                                        <button onClick={() => crewRegistrationGalleryRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'} font-black uppercase text-xs py-3 rounded-xl`}><ImageIcon size={14} className="inline mr-2" />Upload from Gallery</button>
+                                                    </div>
                                                 )}
                                                 <input ref={crewRegistrationUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'crewRegistrationUrl')} />
+                                                <input ref={crewRegistrationGalleryRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'crewRegistrationUrl')} />
                                             </div>
                                         </div>
 

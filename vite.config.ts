@@ -10,13 +10,13 @@ export default defineConfig({
     proxy: {
       '/cxR': {
         // Usamos la URL base confirmada por GetUrl
-        target: 'https://au.itwocx.com/api/25.12', 
+        target: 'https://au.itwocx.com/api/26.08',
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/cxR/, ''),
         headers: {
           'Origin': 'https://au.itwocx.com',
-          'Referer': 'https://au.itwocx.com/api/25.12/',
+          'Referer': 'https://au.itwocx.com/api/26.08/',
           'X-Requested-With': 'XMLHttpRequest'
         }
       }

@@ -130,7 +130,16 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
 
     const pNum = String(safePermit?.itwocxNumber || safePermit?.permitNumber || 'N/A').replace(/\D/g, '') || 'N/A';
 
-    const photos = safePermit?.photos || [];
+    const photos = [...(safePermit?.photos || [])];
+    if (safePermit.approverPhoto && !photos.some(photo => photo.url === safePermit.approverPhoto)) {
+        photos.push({
+            id: 'approver-photo',
+            url: safePermit.approverPhoto,
+            caption: 'Approver site inspection',
+            uploadedBy: 'Approver',
+            date: ''
+        });
+    }
     const photoPages = [];
     for (let i = 0; i < photos.length; i += 2) {
         photoPages.push(photos.slice(i, i + 2));
@@ -164,6 +173,11 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         <p className="font-bold text-sm mb-2 text-blue-900 uppercase">System Generated Record</p>
                         <p className="text-xs mb-1">Generated on: {new Date().toLocaleString()}</p>
                         <p className="text-xs mb-1">Status: <span className="font-black uppercase">{safePermit?.status || 'N/A'}</span></p>
+                        <div className="mt-4 pt-3 border-t border-blue-200 text-xs space-y-1">
+                            <p><span className="font-bold">Permit Issued Date:</span> {safePermit.issuedDate || 'N/A'}</p>
+                            <p><span className="font-bold">Permit Commencement Date:</span> {safePermit.commencementDate || 'N/A'}</p>
+                            <p><span className="font-bold">Permit End Date:</span> {safePermit.endDate || 'N/A'}</p>
+                        </div>
                         <p className="text-xs mt-4 italic text-gray-600">This digital record replaces the printed CX Form. The form must be printed using a scale of 70% if hardcopy is required. No resolution is lost.</p>
                     </div>
                 </div>
@@ -411,7 +425,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <p className="text-red-600 text-[10px] font-bold mb-4">The original copy of this Permit must be retained at the work location while work is occurring.</p>
                 <p className="text-[10px] mb-4">I confirm that all the requirements of these checklists have been met and work may now proceed in accordance with the WMS, JSEA and SP27 Safe Work around Overhead and Underground Services.</p>
                 {/* 🚀 FIX: Usamos permit.receiverSignature (el receptor inicial/inducción) para congelar la página 6 */}
-                    <EBASignature title="Permit Receiver" sig={permit?.receiverSignature} />
+                <EBASignature title="Permit Receiver" sig={permit?.receiverSignature} />
             </Page>
 
             {/* === PAGE 7 === */}
@@ -515,9 +529,9 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                                 <tr key={i} className="h-8">
                                     <td className="border border-black p-1 text-center">{i + 1}.</td>
                                     <td className="border border-black p-1 font-bold uppercase">{h?.receiverName || ''}</td>
-                                        <td className="border border-black p-0"><div className="flex justify-start pl-2">{h?.signature?.data && <img src={h?.signature?.data} className="h-6 object-contain mix-blend-multiply" alt="sig" />}</div></td>
-                                        <td className="border border-black p-0"><div className="flex justify-center">{h?.signature?.data && <img src={h?.signature?.data} className="h-4 object-contain mix-blend-multiply" alt="sig" />}</div></td>
-                                        <td className="border border-black p-1 font-mono text-[9px]">{h?.date ? new Date(h?.date).toLocaleDateString() : 'N/A'}</td>
+                                    <td className="border border-black p-0"><div className="flex justify-start pl-2">{h?.signature?.data && <img src={h?.signature?.data} className="h-6 object-contain mix-blend-multiply" alt="sig" />}</div></td>
+                                    <td className="border border-black p-0"><div className="flex justify-center">{h?.signature?.data && <img src={h?.signature?.data} className="h-4 object-contain mix-blend-multiply" alt="sig" />}</div></td>
+                                    <td className="border border-black p-1 font-mono text-[9px]">{h?.date ? new Date(h?.date).toLocaleDateString() : 'N/A'}</td>
                                 </tr>
                             )
                         })}
