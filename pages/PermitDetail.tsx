@@ -9,7 +9,7 @@ import PermitPDFLayout, { EmergencyProtocolContent } from '../components/PermitP
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { uploadImageToStorage } from '../firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
@@ -17,6 +17,7 @@ import { sanitizeForFirestore } from '../utils/firestore';
 import { getDisplayNameFromEmail } from '../utils/userNames';
 import { generateId } from '../utils/id';
 import { compressImageToJpeg } from '../utils/image';
+import { getTargetCollection } from '../utils/appMode';
 
 interface PermitDetailProps { id: string; onBack: () => void; }
 
@@ -83,6 +84,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [activeTab, setActiveTab] = useState<'engineer' | 'receiver_checklist' | 'issuer' | 'approver' | 'crew' | 'daily' | 'handover' | 'photos' | 'notes' | 'closure'>('engineer');
 
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [requiredFieldErrors, setRequiredFieldErrors] = useState<Record<string, boolean>>({});
+    const [duplicatePermitError, setDuplicatePermitError] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
     const [isUploadingApproverPhoto, setIsUploadingApproverPhoto] = useState(false);
 
@@ -185,11 +188,69 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const allHandoverChecksPassed = handoverItems.every(item => handoverChecks[item.id]);
     const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100 disabled:text-gray-500 shadow-sm";
+    const requiredInputClass = (field: string) => `${inputClass} ${requiredFieldErrors[field] ? 'border-red-600 ring-2 ring-red-200' : ''}`;
+
+    const requiredEngineerFields = [
+        { key: 'itwocxNumber', value: permit.itwocxNumber },
+        { key: 'location', value: permit.location },
+        { key: 'issuedDate', value: permit.issuedDate },
+        { key: 'commencementDate', value: permit.commencementDate },
+        { key: 'endDate', value: permit.endDate },
+        { key: 'excavationType', value: permit.excavationType },
+        { key: 'scopeOfWorks', value: permit.scopeOfWorks }
+    ];
+
+    const validateRequiredEngineerFields = () => {
+        const missingFields = requiredEngineerFields.reduce<Record<string, boolean>>((errors, field) => {
+            if (!String(field.value || '').trim()) errors[field.key] = true;
+            return errors;
+        }, {});
+        setRequiredFieldErrors(missingFields);
+        if (Object.keys(missingFields).length > 0) {
+            alert('Please fill in all required fields highlighted in red.');
+            return false;
+        }
+        return true;
+    };
+
+    const hasDuplicatePermitNumber = async (updatedPermit: Permit) => {
+        const candidate = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || '').trim();
+        if (!candidate) return false;
+
+        const candidateDigits = candidate.replace(/\D/g, '');
+        const snapshot = await getDocs(collection(db, getTargetCollection()));
+        return snapshot.docs.some(existingDoc => {
+            if (existingDoc.id === updatedPermit.id) return false;
+            const existingPermit = existingDoc.data() as Permit;
+            const existingNumber = String(existingPermit.itwocxNumber || existingPermit.permitNumber || '').trim();
+            return existingNumber === candidate || (candidateDigits && existingNumber.replace(/\D/g, '') === candidateDigits);
+        });
+    };
 
     const syncToFirebase = async (updatedPermit: Permit) => {
+        if (await hasDuplicatePermitNumber(updatedPermit)) {
+            setDuplicatePermitError(true);
+            alert('Error: Permit number already exists.');
+            return false;
+        }
+        setDuplicatePermitError(false);
         savePermit(updatedPermit);
         setPermit(updatedPermit);
-        setDoc(doc(db, 'permits', updatedPermit.id), sanitizeForFirestore(updatedPermit), { merge: true }).catch(e => console.error("Firebase background sync:", e));
+        setDoc(doc(db, getTargetCollection(), updatedPermit.id), sanitizeForFirestore(updatedPermit), { merge: true }).catch(e => console.error("Firebase background sync:", e));
+        return true;
+    };
+
+    const handleSaveDraft = async () => {
+        if (!validateRequiredEngineerFields()) return;
+        setIsSubmitting(true);
+        try {
+            const saved = await syncToFirebase({ ...permit, isDraft: true, status: 'draft' });
+            if (saved) alert('Permit draft saved successfully.');
+        } catch (error: any) {
+            alert(`Error saving permit to Firebase: ${error.message}`);
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const updateField = (field: keyof Permit, value: any) => {
@@ -218,6 +279,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     };
 
     const handleIssuePermit = async () => {
+        if (!validateRequiredEngineerFields()) return;
+
         // 🚀 CANDADO DE EMISIÓN: VALIDA LOS RADIO BUTTONS
         const missingIssuerChecks = [
             'knownServicesScanned',
@@ -243,7 +306,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         setIsSubmitting(true);
         try {
             const updated = { ...permit, isDraft: false, status: 'issued', syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'issue', cxSyncError: null } as any;
-            await syncToFirebase(updated);
+            const saved = await syncToFirebase(updated);
+            if (!saved) return;
 
             alert("✅ Permit Saved and sync in the background\n\nTabs 1, 2, and 3 are locked.");
         } catch (error: any) {
@@ -559,13 +623,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                 <div className="bg-white rounded-t-2xl border border-gray-200 p-6 md:p-8 flex justify-between shadow-sm items-center relative">
                     <div>
-                        <h1 className="text-3xl md:text-4xl font-black text-gray-900 uppercase mb-2">{permit.itwocxNumber || permit.permitNumber}</h1>
+                        <h1 className="text-3xl md:text-4xl font-black text-gray-900 uppercase mb-2">{permit.itwocxNumber || permit.permitNumber ? `PF# ${permit.itwocxNumber || permit.permitNumber}` : 'NEW PERMIT'}</h1>
                         <div className="flex flex-col md:flex-row md:items-center text-xs text-gray-500 font-bold uppercase tracking-widest gap-2 md:gap-4"><span className="bg-gray-100 px-2 py-1 rounded text-gray-900 w-fit">{permit.location || 'No Location'}</span><span>Active Receiver: <span className="text-blue-700">{currentReceiverName}</span></span></div>
                     </div>
                     <div className={`px-6 py-3 rounded-xl text-sm font-black uppercase text-white h-fit shadow-md ${permit.status === 'closed' ? 'bg-red-600' : (permit.isDraft ? 'bg-orange-500 animate-pulse' : (isExecutionBlocked ? 'bg-amber-500' : 'bg-green-600'))}`}>
                         {permit.status === 'closed' ? 'CLOSED' : (permit.isDraft ? 'DRAFT (Building)' : (isExecutionBlocked ? 'PENDING APPROVAL' : 'ISSUED / ACTIVE'))}
                     </div>
                 </div>
+
+                {duplicatePermitError && <div className="bg-red-50 border border-red-300 text-red-700 p-3 mt-4 rounded-lg text-sm font-bold">Error: Permit number already exists.</div>}
 
                 {isMaster && (permit as any).cxSyncPending && (
                     <div className="bg-amber-100 border-l-4 border-amber-500 text-amber-800 p-3 mt-4 text-sm font-bold flex justify-between items-center gap-2 shadow-inner">
@@ -607,13 +673,16 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 {isIssued && <div className="bg-gray-100 text-gray-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-center gap-2"><Lock size={16} /> This planning section is locked because the permit has been issued.</div>}
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
-                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location</p><input type="text" className={inputClass} value={permit.location} onChange={e => updateField('location', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} /></div>
-                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Issued Date</p><input type="date" className={inputClass} value={permit.issuedDate || ''} onChange={e => updateField('issuedDate', e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
-                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Commencement Date (Start Date)</p><input type="date" className={inputClass} value={permit.commencementDate || ''} onChange={e => updateCommencementDate(e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
-                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit End Date</p><input type="date" className={inputClass} value={permit.endDate || ''} onChange={e => updateField('endDate', e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
-                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Excavation Type</p><select className={inputClass} value={permit.excavationType} onChange={e => updateField('excavationType', e.target.value)} disabled={isIssued || isClosed}><option value="mechanical">Mechanical Excavation</option><option value="hydro">Hydro Excavation</option><option value="hand">Hand Digging</option></select></div>
-                                    <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works</p><textarea className={`${inputClass} h-20`} value={permit.scopeOfWorks} onChange={e => updateField('scopeOfWorks', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed}></textarea></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">ITWOCX Permit # *</p><input type="text" className={requiredInputClass('itwocxNumber')} value={permit.itwocxNumber || ''} onChange={e => updateField('itwocxNumber', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} placeholder="Enter ITWOCX permit number" /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location</p><input type="text" className={requiredInputClass('location')} value={permit.location} onChange={e => updateField('location', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Issued Date</p><input type="date" className={requiredInputClass('issuedDate')} value={permit.issuedDate || ''} onChange={e => updateField('issuedDate', e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Commencement Date (Start Date)</p><input type="date" className={requiredInputClass('commencementDate')} value={permit.commencementDate || ''} onChange={e => updateCommencementDate(e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit End Date</p><input type="date" className={requiredInputClass('endDate')} value={permit.endDate || ''} onChange={e => updateField('endDate', e.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                    <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Excavation Type</p><select className={requiredInputClass('excavationType')} value={permit.excavationType} onChange={e => updateField('excavationType', e.target.value)} disabled={isIssued || isClosed}><option value="">Select excavation type</option><option value="mechanical">Mechanical Excavation</option><option value="hydro">Hydro Excavation</option><option value="hand">Hand Digging</option></select></div>
+                                    <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works</p><textarea className={`${requiredInputClass('scopeOfWorks')} h-20`} value={permit.scopeOfWorks} onChange={e => updateField('scopeOfWorks', e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed}></textarea></div>
                                 </div>
+
+                                {!isIssued && !isClosed && <button onClick={handleSaveDraft} disabled={isSubmitting} className="mb-8 w-full bg-blue-700 hover:bg-blue-800 disabled:bg-gray-400 text-white py-3 rounded-xl font-black uppercase shadow-md">{isSubmitting ? 'SAVING DRAFT...' : 'SAVE & SYNC DRAFT'}</button>}
 
                                 <div className="space-y-4 mb-10 border-b border-gray-100 pb-10">
                                     {partAItems.map(item => (

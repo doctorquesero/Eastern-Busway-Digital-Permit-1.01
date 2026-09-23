@@ -111,3 +111,4 @@ K. Mobile & iOS Accessibility (WebKit Constraints)
 
 STRICT DATA ENFORCEMENT
 RULE 1: I will NEVER invent permit IDs (e.g., EB-PT) or dummy data. RULE 2: 'Breaking Ground' permits MUST strictly use `permitType: 'BG'`. RULE 3: I will NEVER assume data structures; if I lack the original initialization logic, I will ask the Chief Architect before guessing. RULE 4: I must not break the LIVE vs DEMO environment toggles.
+RULE 6: Never allow permit saving or issuing with empty required fields. Always highlight missing fields in red. Duplicate permit numbers are strictly forbidden.
