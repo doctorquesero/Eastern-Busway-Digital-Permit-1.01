@@ -36,8 +36,17 @@ export const getActiveSessionKey = () => { return ""; };
 // ============================================================================
 // 🧠 ASIGNACIÓN DE ROLES DINÁMICA (MANTENIDA PORQUE ES DE FIREBASE)
 // ============================================================================
+const assignedRolesFor = (entry: { role?: string; roles?: string | string[] }): string[] => {
+    const rawRoles = Array.isArray(entry.roles) ? entry.roles : String(entry.roles || entry.role || '').split(',');
+    const roles = rawRoles.map(role => String(role).trim()).filter(Boolean);
+    // Issuer and Receiver are mutually exclusive: Issuer wins
+    return roles.some(role => role.toLowerCase() === 'issuer')
+        ? roles.filter(role => role.toLowerCase() !== 'receiver')
+        : roles;
+};
+
 export const assignUserRoleByEmail = async (email: string): Promise<string> => {
-    const loginId = String(email || '').toLowerCase();
+    const loginId = String(email || '').trim().toLowerCase();
     let assignedRole = "Site Engineer";
 
     try {
@@ -46,14 +55,14 @@ export const assignUserRoleByEmail = async (email: string): Promise<string> => {
 
         if (docSnap.exists()) {
             const data = docSnap.data();
-            const roles: { email?: string, role?: string }[] = Array.isArray(data.roleAssignments) ? data.roleAssignments : [];
-            const userMatch = roles.find(u => {
-                const assignedEmail = String(u?.email || '').toLowerCase();
-                return assignedEmail && loginId.includes(assignedEmail);
-            });
+            const roles: { email?: string, role?: string, roles?: string | string[] }[] = Array.isArray(data.roleAssignments) ? data.roleAssignments : [];
+            const userMatch = roles.find(u => String(u?.email || '').trim().toLowerCase() === loginId);
 
             if (userMatch) {
-                assignedRole = userMatch.role || assignedRole;
+                const userRoles = assignedRolesFor(userMatch);
+                if (userRoles.length > 0) assignedRole = userRoles.join(', ');
+            } else if (loginId === 'dietrich.truchsess@easternbusway.nz') {
+                assignedRole = "Master";
             }
         } else {
             if (loginId.includes('dietrich') || loginId.includes('eba-dt')) {

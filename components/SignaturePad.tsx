@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Eraser, Check, Type, PenTool } from 'lucide-react';
-import { Signature, SignatureType } from '../types';
+import { Signature } from '../types';
+
+type SignatureType = 'draw' | 'type';
 import { getDisplayNameFromEmail } from '../utils/userNames';
 
 interface SignaturePadProps {
@@ -27,12 +29,12 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
     }
   }, [initialValue]);
 
-  // Sync with external name if provided and not yet signed
+  // Sync with external name only when it changes, so the signer can still edit the name freely
   useEffect(() => {
-    if (externalName !== undefined && !hasSignature) {
+    if (externalName && !hasSignature) {
       setSignerName(displaySignerName(externalName));
     }
-  }, [externalName, hasSignature]);
+  }, [externalName]);
 
   const getCoords = (e: React.MouseEvent | React.TouchEvent) => {
     const canvas = canvasRef.current;

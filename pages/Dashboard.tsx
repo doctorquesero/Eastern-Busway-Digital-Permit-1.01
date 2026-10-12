@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, doc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff, Plus, ChevronRight } from 'lucide-react';
+import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff, Plus, ChevronRight, Download } from 'lucide-react';
 import { getCurrentUserEmail, getCircuitBreakerRemainingTime } from '../services/cx';
 import { getAppMode, getTargetCollection } from '../utils/appMode';
 
@@ -28,6 +28,9 @@ const permitCategories = [
 
 const MASTER_SECURITY_PIN = "CX-Master-2026";
 const COLUMN_FILTERS_STORAGE_KEY = 'eba_dashboard_column_filters';
+const COLUMNS_STORAGE_KEY = 'eba_dashboard_columns';
+const SEARCH_STORAGE_KEY = 'eba_dashboard_search';
+const DEFAULT_COLUMNS = ['reference', 'type', 'location', 'status', 'action'];
 
 const ALL_COLUMNS = [
   { id: 'reference', label: 'Reference', alwaysVisible: true },
@@ -56,9 +59,18 @@ export const Dashboard = () => {
   const currentUser = getCurrentUserEmail().toLowerCase();
   const isSuperAdmin = currentUser.includes('dietrich') || currentUser.includes('eba-dt');
 
-  const [selectedColumns, setSelectedColumns] = useState<string[]>(['reference', 'type', 'location', 'status', 'action']);
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(() => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(COLUMNS_STORAGE_KEY) || 'null');
+      const valid = Array.isArray(cached) ? cached.filter((id: unknown) => ALL_COLUMNS.some(c => c.id === id)) : [];
+      return valid.length > 0 ? valid : DEFAULT_COLUMNS;
+    } catch {
+      return DEFAULT_COLUMNS;
+    }
+  });
   const [showColumnSelector, setShowColumnSelector] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem(SEARCH_STORAGE_KEY) || '');
+  const [searchInput, setSearchInput] = useState(() => localStorage.getItem(SEARCH_STORAGE_KEY) || '');
   const [currentPage, setCurrentPage] = useState(1);
   const [cbTimeLeft, setCbTimeLeft] = useState(0);
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
@@ -77,7 +89,7 @@ export const Dashboard = () => {
   });
 
   useEffect(() => {
-    const hasActiveFilters = Object.values(columnFilters).some(values => values.length > 0);
+    const hasActiveFilters = Object.values(columnFilters).some((values: string[]) => values.length > 0);
     if (hasActiveFilters) {
       localStorage.setItem(COLUMN_FILTERS_STORAGE_KEY, JSON.stringify(columnFilters));
     } else {
@@ -85,11 +97,21 @@ export const Dashboard = () => {
     }
   }, [columnFilters]);
 
+  useEffect(() => {
+    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(selectedColumns));
+  }, [selectedColumns]);
+
+  useEffect(() => {
+    if (searchQuery) localStorage.setItem(SEARCH_STORAGE_KEY, searchQuery);
+    else localStorage.removeItem(SEARCH_STORAGE_KEY);
+  }, [searchQuery]);
+
   const loadPermits = async () => {
     setIsSyncing(true);
     try {
+      // Force fresh fetch by disabling cache
       const q = query(collection(db, getTargetCollection()), where('env', '==', getAppMode()));
-      const querySnapshot = await getDocs(q);
+      const querySnapshot = await getDocs(q, { source: 'server' });
       const permitsFromCloud: any[] = [];
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data();
@@ -100,6 +122,7 @@ export const Dashboard = () => {
       setSavedPermits(permitsFromCloud);
       localStorage.setItem('eba_permits_db_v3', JSON.stringify(permitsFromCloud));
     } catch (error) {
+      console.warn("Failed to fetch fresh data from server, falling back to cache:", error);
       const rawData = localStorage.getItem('eba_permits_db_v3');
       if (rawData) {
         try {
@@ -107,7 +130,9 @@ export const Dashboard = () => {
           const arr = Array.isArray(parsed) ? parsed : Object.values(parsed);
           arr.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
           setSavedPermits(arr);
-        } catch (parseErr) { }
+        } catch (parseErr) {
+          console.error("Failed to parse cached data:", parseErr);
+        }
       }
     } finally {
       setIsSyncing(false);
@@ -115,7 +140,11 @@ export const Dashboard = () => {
   };
 
   useEffect(() => {
-    loadPermits();
+    // Small delay to ensure Firebase connection is established
+    const initialLoadTimer = setTimeout(() => {
+      loadPermits();
+    }, 100);
+    
     const cbInterval = setInterval(() => {
       setCbTimeLeft(getCircuitBreakerRemainingTime());
     }, 1000);
@@ -127,6 +156,7 @@ export const Dashboard = () => {
     }, 500);
 
     return () => {
+      clearTimeout(initialLoadTimer);
       clearInterval(cbInterval);
       clearInterval(interval);
       clearInterval(modeRadar);
@@ -239,9 +269,59 @@ export const Dashboard = () => {
   const clearAllFilters = () => {
     const emptyFilters = Object.keys(columnFilters).reduce((filters, key) => ({ ...filters, [key]: [] }), {} as Record<string, string[]>);
     setSearchQuery('');
+    setSearchInput('');
     setColumnFilters(emptyFilters);
     localStorage.removeItem(COLUMN_FILTERS_STORAGE_KEY);
+    localStorage.removeItem(SEARCH_STORAGE_KEY);
+    setSelectedColumns(DEFAULT_COLUMNS);
+    setCurrentPage(1);
     setActiveFilterMenu(null);
+  };
+
+  const submitSearch = (event?: React.FormEvent) => {
+    event?.preventDefault();
+    setSearchQuery(searchInput.trim());
+  };
+
+  const exportToExcel = async () => {
+    if (filteredPermits.length === 0) return alert('No permits to export.');
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Permits');
+      sheet.columns = [
+        { header: 'Reference', key: 'reference', width: 16 },
+        { header: 'Permit Type', key: 'type', width: 14 },
+        { header: 'Location', key: 'location', width: 36 },
+        { header: 'Status', key: 'status', width: 12 },
+        { header: 'Site Engineer', key: 'engineer', width: 24 },
+        { header: 'Receiver', key: 'receiver', width: 24 },
+        { header: 'Issuer', key: 'issuer', width: 24 },
+        { header: 'Approver', key: 'approver', width: 24 }
+      ];
+      sheet.getRow(1).font = { bold: true };
+      filteredPermits.forEach(p => {
+        sheet.addRow({
+          reference: p.itwocxNumber || p.permitNumber || 'DRAFT',
+          type: String(p.permitType || p.excavationType || 'BG').toUpperCase(),
+          location: p.location || '',
+          status: p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE'),
+          engineer: p.siteEngineerSignature?.name || '',
+          receiver: p.receiverSignature?.name || '',
+          issuer: p.issuerSignature?.name || '',
+          approver: p.approverSignature?.name || ''
+        });
+      });
+      const buffer = await workbook.xlsx.writeBuffer();
+      const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `permits-.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      alert(`Excel export failed: `);
+    }
   };
 
   const totalClosed = filteredPermits.filter(p => p.status === 'closed').length;
@@ -281,6 +361,12 @@ export const Dashboard = () => {
                 <span>Sync Paused: Rate Limit Protection ({cbTimeLeft}s)</span>
               </div>
             )}
+            <button onClick={() => setShowCreatePermit(true)} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-black uppercase tracking-wide text-white shadow-sm transition-colors hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-200">
+              <Plus size={16} /> Add Permit
+            </button>
+            <button onClick={exportToExcel} className="inline-flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm font-bold text-green-800 shadow-sm transition-colors hover:bg-green-100">
+              <Download size={16} /> <span className="hidden sm:inline">Export Excel</span>
+            </button>
             <button onClick={loadPermits} disabled={isSyncing} className="flex items-center gap-2 bg-white border border-gray-300 shadow-sm px-4 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all">
               {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
               <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Refresh Cloud'}</span>
@@ -307,24 +393,32 @@ export const Dashboard = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b pb-2 relative">
             <h2 className="text-2xl font-bold text-gray-900">Cloud Synced Permits</h2>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <form onSubmit={submitSearch} className="flex items-center gap-2">
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search permit #..."
+                    value={searchInput}
+                    onChange={event => setSearchInput(event.target.value)}
+                    className="w-full sm:w-48 focus:sm:w-64 pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white focus:outline-none focus:border-blue-500 shadow-sm transition-all"
+                  />
+                  {(searchInput || searchQuery) && (
+                    <button type="button" onClick={() => { setSearchInput(''); setSearchQuery(''); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" aria-label="Clear search">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                <button type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors">
+                  <Search size={16} /> Search
+                </button>
+              </form>
+              <button onClick={clearAllFilters} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-black text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 shadow-sm transition-colors">
+                <X size={16} /> Clear All Filters
+              </button>
               <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search permit #..."
-                  value={searchQuery}
-                  onChange={event => setSearchQuery(event.target.value)}
-                  className="w-full sm:w-48 focus:sm:w-64 pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white focus:outline-none focus:border-blue-500 shadow-sm transition-all"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" aria-label="Clear search">
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-              <div className="relative">
-                <button onClick={() => setShowColumnSelector(!showColumnSelector)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 shadow-sm transition-colors">
-                  <Columns size={16} /> COLUMNS
+                <button onClick={() => setShowColumnSelector(!showColumnSelector)} className="flex items-center gap-2 px-4 py-2 min-w-[130px] shrink-0 whitespace-nowrap justify-center rounded-lg text-sm font-bold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 shadow-sm transition-colors">
+                  <Columns size={16} className="shrink-0" /> COLUMNS
                 </button>
                 {showColumnSelector && (
                   <div className="absolute right-0 top-12 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
@@ -342,9 +436,6 @@ export const Dashboard = () => {
                   </div>
                 )}
               </div>
-              <button onClick={clearAllFilters} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-black text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 shadow-sm transition-colors">
-                <X size={16} /> Clear All Filters
-              </button>
             </div>
           </div>
 
@@ -424,7 +515,7 @@ export const Dashboard = () => {
                               <div className="flex flex-col gap-1">
                                 <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider text-center ${pStatus === 'CLOSED' ? 'bg-red-100 text-red-800' : (pStatus === 'DRAFT' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800')}`}>{pStatus}</span>
                                 {p.syncStatus === 'pending' && <span className="animate-pulse bg-amber-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full flex items-center justify-center gap-1 uppercase"><RefreshCw size={8} className="animate-spin" /> Sync Queue</span>}
-                                {p.cxSyncError && <div className="flex items-center gap-1 text-red-600" title={p.cxSyncError}><CloudOff size={10} /><span className="text-[7px] font-bold uppercase truncate max-w-[80px]">Sync Error</span></div>}
+                                {p.cxSyncError && p.syncStatus !== 'pending' && <div className="flex items-center gap-1 text-red-600" title={p.cxSyncError}><CloudOff size={10} /><span className="text-[7px] font-bold uppercase truncate max-w-[80px]">Sync Error</span></div>}
                               </div>
                             </td>
                           )}
@@ -463,24 +554,12 @@ export const Dashboard = () => {
             )}
           </div>
         </div>
-        <div className="mt-12">
-          <div className="flex items-center justify-between gap-4 border-b pb-4">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900">Permit Action Center</h2>
-              <p className="text-sm text-gray-500 mt-1">Start a new permit from the available templates.</p>
-            </div>
-            <button onClick={() => setShowCreatePermit(true)} className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-blue-700 px-6 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg transition-colors hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-200">
-              <Plus size={20} /> Create Permit
-            </button>
-          </div>
-        </div>
-
         {showCreatePermit && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="create-permit-title">
             <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
               <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-6 py-5">
                 <div>
-                  <h2 id="create-permit-title" className="text-xl font-black uppercase tracking-tight text-gray-900">Create Permit</h2>
+                  <h2 id="create-permit-title" className="text-xl font-black uppercase tracking-tight text-gray-900">Add Permit</h2>
                   <p className="mt-1 text-sm text-gray-500">Choose a permit type to begin.</p>
                 </div>
                 <button onClick={() => setShowCreatePermit(false)} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900" aria-label="Close create permit menu">
@@ -495,15 +574,16 @@ export const Dashboard = () => {
                       key={permit.code}
                       type="button"
                       onClick={() => isActive && handleCategoryClick(permit.code)}
-                      disabled={!isActive}
-                      className={`flex items-center gap-4 rounded-xl border p-4 text-left transition-all ${isActive ? 'border-blue-200 bg-white text-gray-900 shadow-sm hover:border-blue-500 hover:bg-blue-50 hover:shadow-md' : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 opacity-70'}`}
+                      aria-disabled={!isActive}
+                      title={isActive ? permit.name : 'In Construction'}
+                      className={`flex items-center gap-4 rounded-xl border p-4 text-left transition-all ${isActive ? 'border-blue-200 bg-white text-gray-900 shadow-sm hover:border-blue-500 hover:bg-blue-50 hover:shadow-md' : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 opacity-70 hover:border-amber-300'}`}
                     >
                       <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl ${isActive ? permit.color : 'bg-gray-200 text-gray-400 grayscale'}`}>{permit.icon}</span>
                       <span className="min-w-0 flex-1">
                         <span className="block text-xs font-black uppercase tracking-tight">{permit.name}</span>
                         <span className="mt-1 flex items-center gap-2 text-[9px] font-black uppercase text-gray-400">
                           {permit.code}
-                          {!isActive && <span className="rounded bg-gray-300 px-1.5 py-0.5 text-[8px] text-gray-600">WIP</span>}
+                          {!isActive && <span className="rounded bg-gray-300 px-1.5 py-0.5 text-[8px] text-gray-600">In Construction</span>}
                           {isActive && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[8px] text-green-700">Available</span>}
                         </span>
                       </span>

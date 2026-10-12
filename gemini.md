@@ -8,32 +8,29 @@ A. Dynamic Routing & Swagger Adherence
   - The iTwoCX API strictly requires the Project Code to be injected into the URL path, NOT passed as a query string or header. The official schema is: `/Api/{projectCode}/Endpoint/Method`.
   - Base URL Constraint: The base constant must be strictly `https://au.itwocx.com/api/26.08`.
   - Passwords: As of v26.08, login payloads must use plain-text `Password` (PascalCase), strictly avoiding the deprecated `EncryptedPassword` field.
+  - ALL outbound requests MUST include the configured `User-Agent` and `Accept: application/json` headers.
 
-B. WAF Bypass & Headers Constraint
-  - iTwoCX employs a strict Web Application Firewall (WAF) that rejects automated backend scripts with a 403 HTML response.
-  - ALL outbound HTTP requests (Fetch/Axios) to iTwoCX MUST globally inject standard browser headers:
-    `"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"`
-    `"Accept": "application/json"`
+B. Document Lookup Endpoint (GetByReference - APPROVED STANDARD, v26.08)
+  - Find permits with `GET /Api/{projectCode}/Document/GetByReference?reference=${encodeURIComponent('PF#' + paddedNumber)}`. This supersedes the earlier `GetByDocCode` and `POST /Document/Search` standards; do not use either.
+  - Why: in 26.08 the `DocCode` field is the document TYPE (`"PF"`), not the permit number. The "REF" shown in the CX UI is the `Reference` field. `GetByDocCode?code=PF%2311629` returns HTTP 200 with `{"Items":[],"NextPageLink":null,"Count":0}` (silent empty result, no error), so it can never find a permit.
+  - `GetByReference` returns the document object directly (not a paged list). Use its internal numeric `Id` (e.g. `21432820` for `PF#11629`) for attachments and updates. The worker also tolerates a paged `Items[0]` shape.
+  - Fallback: if `GetByReference` finds nothing and the Firestore permit has `cxDocumentId`, call `GET /Api/{projectCode}/Document/GetById/{id}`. The worker saves `cxDocumentId` after every successful sync.
+  - Never log passwords or session tokens.
 
-C. The Document Search API Constraint (v26.08)
-  - CRITICAL RULE: Never use `GetByDocCode` to search for a specific permit. `DocCode` refers strictly to the Form Type (e.g., `PF`), while the permit number (e.g., `PF#0094`) is the `cx_reference`.
-  - To find a document, you MUST send a POST request to `/Api/{projectCode}/Document/Search`.
-  - The Search payload MUST strictly follow this structure:
-    `{ "CriterionList": { "cx_reference": "PF#0094" }, "MaxNumber": 1 }`
-  - V26.08 Response Handling: The Search endpoint returns an array containing the internal numeric ID directly (e.g., `[21431212]`). The worker MUST extract this primitive `Id` for all subsequent operations.
-
-D. Reference Number Sanitization & Zero-Padding
-  - The iTwoCX workflow engine is mathematically strict. Permits must be zero-padded to a minimum of 4 digits and prefixed with the literal string `PF#`.
+C. Reference Format & URL Encoding
+  - The iTwoCX workflow engine is mathematically strict. Permits must be zero-padded to a minimum of 4 digits (`55` -> `0055`, `11629` stays `11629`) and prefixed with the literal string `PF#`.
   - Example Logic: 
     `const cleanNumber = String(permitNumber).replace(/\D/g, "");`
     `const paddedNumber = cleanNumber.padStart(4, "0");`
     `const exactCXReference = 'PF#' + paddedNumber;`
-  - Double URL-Encoding Trap: Do NOT manually `encodeURIComponent()` the reference if the HTTP client (like Axios) auto-encodes query/body parameters. Pass the raw string (e.g., `PF#0094`).
+  - The `#` MUST be URL-encoded with `encodeURIComponent()`, so `PF#11629` is sent as `PF%2311629`:
+    `GET /Api/{projectCode}/Document/GetByReference?reference=${encodeURIComponent(exactCXReference)}`
+  - Sending an unencoded `PF#11629` will fail (`#` starts a URL fragment).
 
-E. Document Updates (Minimal Payload)
-  - In v26.08, deep cloning the entire document is NO LONGER REQUIRED.
-  - To update a document via `PUT /Api/{projectCode}/Document/Update`, send a minimal payload containing ONLY the extracted internal `Id` and the fields to mutate.
-  - Example Payload: `{ "Id": 21431212, "StatusName": "PERMIT ISSUED", "ActionCodes": ["ISSUE"] }`
+D. Document Update (Golden Path)
+  - Sequence: fresh login -> `GetByReference` -> deep clone the returned document -> mutate only `StatusName` and `ActionCodes` on the clone (in memory) -> upload PDF via undici (closures only, before the PUT changes the status) -> `PUT /Api/{projectCode}/Document/Update` with the full cloned object. Never send a minimal payload.
+  - Closure: `StatusName = "CLOSED"`, `ActionCodes = ["CLOSE"]`.
+  - Issuance: `StatusName = "PERMIT ISSUED"`, `ActionCodes = ["ISSUE"]`.
 
 F. Exact Semantics (Status & Action Codes)
   - To ISSUE a permit: `StatusName = "PERMIT ISSUED"` | `ActionCodes = ["ISSUE"]`
@@ -43,16 +40,23 @@ F. Exact Semantics (Status & Action Codes)
 G. File Attachments (Signed PDFs)
   - PDFs must be uploaded BEFORE the document status is changed to CLOSED. Once a document is CLOSED in CX, it becomes immutable and attachments will be rejected.
   - Endpoint: `POST /Api/{projectCode}/Attachment/Upload?documentId={Id}` (Using the extracted internal `Id`).
+  - Binary PDF uploads MUST use an explicit `undici` dispatcher: `new Agent({ headersTimeout: 110000, bodyTimeout: 110000 })` passed as `dispatcher` to `undici.fetch`. Node's native `fetch` ignores per-call timeout options, so large uploads fail with `UND_ERR_HEADERS_TIMEOUT`. 110s stays under the 120s function `timeoutSeconds`. `onPermitWritten`/`onDemoPermitWritten` run with `memory: '1GiB'`, `timeoutSeconds: 120`.
 
-H. Session Token Auto-Renewal (403 HTML Error Handling)
+H. v26.08 Login Authentication (Raw Password)
+  - Authenticate over HTTPS using `POST /Api/Login/ByEmail` against the configured v26.08 base URL.
+  - Send the login DTO with PascalCase `Email` and `Password` fields. `Password` contains the raw password value; never call the removed `Login/EncryptPassword` endpoint or send `EncryptedPassword`.
+  - Require a session token in a successful login response before caching it. Never log passwords or session tokens.
+  - Send the session token in the `key` header on subsequent iTwoCX requests. Refresh and retry once when the session is rejected.
+
+I. Session Token Auto-Renewal (403 HTML Error Handling)
   - The iTwoCX API returns a 403 HTML login page when the Session Token expires (or if WAF headers are missing). The backend MUST catch any 403/401 or HTML parsing errors, trigger a new `cxLogin()` to fetch a fresh token, and automatically retry the failed request once before sending it to the Dead Letter Queue.
 
-I. Environment Toggle & Dynamic CX Routing (LIVE vs DEMO)
-  - The application supports switching between LIVE and DEMO data modes via the Master Settings UI toggle.
-  - The backend sync worker MUST dynamically determine the iTwoCX Project Code based on the Firestore collection path of the triggered document.
-  - If the document originates from the `permits_demo` collection, the worker must set `cxProjectCode = "EB-DEMO"`.
-  - If the document originates from the standard `permits` collection, the worker must set `cxProjectCode = "EB"`.
-  - Manual `.env` overrides for the project code are strictly deprecated; the database origin is the absolute source of truth for routing.
+J. LIVE / DEMO Environment Coexistence
+  - LIVE is the primary production pipeline: Firestore collection `permits`, iTwoCX project code `EB`, handled by `onPermitWritten`.
+  - DEMO coexists with LIVE: Firestore collection `permits_demo`, iTwoCX project code `EB-DEMO`, handled by `onDemoPermitWritten`. The environment toggle (`getAppMode` / `getTargetCollection`) and demo routing are active features. Do NOT remove or strip them.
+  - Both pipelines share the same `processPendingPermitSync` worker and the same Rules 1.A-1.I; only the collection and project code differ.
+  - Never mix data between environments: queries must stay scoped to the active environment's collection and `env` value.
+  - Master-only access and testing credentials are restricted to the exact email `dietrich.truchsess@easternbusway.nz`.
 
 
 2. Core Architectural Rules (PermitDetail.tsx & UI)
@@ -106,9 +110,26 @@ K. Mobile & iOS Accessibility (WebKit Constraints)
   - CSS Typing Bug: To prevent iOS Safari from muting text inputs, all `input` and `textarea` elements must globally enforce `-webkit-user-select: text !important;` and `touch-action: manipulation;`.
   - File Uploads (Camera vs Gallery): File input components (`<input type="file">`) must omit the `capture="environment"` attribute to ensure iOS presents both "Take Photo" and "Photo Library" native options. Always use `accept="image/*, .heic, .heif"` to support Apple formats.
 
-3. Agent Behavioral Rules
+
+3. Native Mobile Printing Architecture
+
+A. Pure CSS Print Flow
+  - The application MUST NOT use custom "Print Preview" modals, fixed positioning, absolute positioning, or `overflow-hidden` containers for documents meant to be printed. These CSS properties break the native mobile print spoolers on both legacy Android and iOS devices, resulting in blank pages.
+  - The print layout must rely entirely on native standard DOM flow and `@media print` utility classes (e.g., Tailwind's `print:hidden` to hide UI elements). 
+
+B. iOS WebKit Print Handler (CRITICAL)
+  - The native `window.print()` command fails silently on iOS Safari and Chrome if fired synchronously inside a React synthetic event, or if the triggering button retains focus.
+  - ALL print buttons in the application MUST implement the following strict iOS-safe handler:
+    1. Remove focus from the active element: `if (document.activeElement instanceof HTMLElement) document.activeElement.blur();`
+    2. Wrap the print command in a timeout to allow the event loop to settle: `setTimeout(() => { window.print(); }, 100);`
+
+
+4. Agent Behavioral Rules
   - Permit creation must NEVER use dummy IDs or bypass DEMO/LIVE routing. Always preserve the original initialization payload and ITWOCX API standards. If unsure, stop and ask.
 
 STRICT DATA ENFORCEMENT
-RULE 1: I will NEVER invent permit IDs (e.g., EB-PT) or dummy data. RULE 2: 'Breaking Ground' permits MUST strictly use `permitType: 'BG'`. RULE 3: I will NEVER assume data structures; if I lack the original initialization logic, I will ask the Chief Architect before guessing. RULE 4: I must not break the LIVE vs DEMO environment toggles.
+RULE 1: I will NEVER invent permit IDs (e.g., EB-PT) or dummy data. 
+RULE 2: 'Breaking Ground' permits MUST strictly use `permitType: 'BG'`. 
+RULE 3: I will NEVER assume data structures; if I lack the original initialization logic, I will ask the Chief Architect before guessing. 
+RULE 4: I must not break the LIVE vs DEMO environment toggles.
 RULE 6: Never allow permit saving or issuing with empty required fields. Always highlight missing fields in red. Duplicate permit numbers are strictly forbidden.

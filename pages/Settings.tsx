@@ -220,7 +220,7 @@ export const Settings: React.FC = () => {
 
         return () => {
             unsubscribe();
-            Object.values(retryTimers.current).forEach((timer) =>
+            Object.values(retryTimers.current).forEach((timer: any) =>
                 clearTimeout(timer),
             );
         };
@@ -265,7 +265,9 @@ export const Settings: React.FC = () => {
             ...previous,
             roles: previous.roles.includes(role)
                 ? previous.roles.filter((item) => item !== role)
-                : [...previous.roles, role],
+                : [...previous.roles.filter((item) => !(
+                    (role === 'Issuer' && item === 'Receiver') || (role === 'Receiver' && item === 'Issuer')
+                )), role],
         }));
     };
 

@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
-import * as admin from 'firebase-admin';
+import { deleteApp, getApps } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -36,26 +37,17 @@ const getPermitReference = (permit: FirebaseFirestore.DocumentData) =>
 const run = async () => {
     initializeTestAdmin();
     const { processPendingPermitSync } = await import('./index.js');
-    const db = admin.firestore();
+    const db = getFirestore();
     console.log('[TEST] Starting local CX sync test for permit reference 94.');
     const authSnapshot = await db.collection('settings').doc('cx_auth').get();
     const authData = authSnapshot.data();
     console.log(`[TEST] Token validation: ${authData?.session_key ? 'cached session token found' : 'no cached session token; worker will renew/login'}.`);
 
-    let match: FirebaseFirestore.QueryDocumentSnapshot | undefined;
-    let collectionName = '';
-    for (const candidateCollection of ['permits_demo', 'permits']) {
-        const snapshot = await db.collection(candidateCollection).get();
-        const candidate = snapshot.docs.find((doc) => getPermitReference(doc.data()) === TARGET_REFERENCE);
-        if (candidate) {
-            match = candidate;
-            collectionName = candidateCollection;
-            break;
-        }
-    }
+    const snapshot = await db.collection('permits').get();
+    const match = snapshot.docs.find((doc) => getPermitReference(doc.data()) === TARGET_REFERENCE);
 
     if (!match) {
-        throw new Error('Permit reference 94 was not found in permits_demo or permits.');
+        throw new Error('Permit reference 94 was not found in permits.');
     }
 
     const permit = match.data();
@@ -64,10 +56,10 @@ const run = async () => {
         ? { ...permit, status: 'active', cxSyncPending: null, syncStatus: 'synced' }
         : { ...permit, isDraft: true, status: 'draft', cxSyncPending: null, syncStatus: 'synced' };
 
-    console.log(`[TEST] Search results: ${collectionName}/${match.id}`);
+    console.log(`[TEST] Search results: permits/${match.id}`);
     console.log(`[TEST] Reference: ${permit.itwocxNumber || permit.permitNumber}; action: ${isClosure ? 'Closure' : 'Issuance'}; PDF: ${permit.pdfBackupUrl ? 'available' : 'missing'}.`);
     console.log('[TEST] Invoking the production CX sync worker.');
-    await processPendingPermitSync(match.id, permit, previousValue, collectionName);
+    await processPendingPermitSync(match.id, permit, previousValue);
     console.log('[TEST] Final PUT response: CX sync worker completed successfully.');
     console.log('[TEST] PDF upload status: attachment step completed when closure was requested.');
 };
@@ -79,5 +71,5 @@ run()
     })
     .finally(() => {
         if (temporaryCredentialsPath) fs.rmSync(temporaryCredentialsPath, { force: true });
-        if (admin.apps.length) void admin.app().delete();
+        if (getApps().length) void deleteApp(getApps()[0]);
     });

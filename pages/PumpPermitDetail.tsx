@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Loader2, Save, Printer, Plus, CheckCircle, Droplets, ShieldCheck, FileCheck, Check, Trash2, Users, ImageIcon, CloudUpload, Camera } from 'lucide-react';
+import { DebouncedInput, DebouncedTextArea, SyncedSelect, SyncedDateInput } from '../components/DebouncedFields';
+import { addDaysISO } from '../utils/dateUtils';
 import { Permit, MonitoringLogEntry, PermitPhoto } from '../types';
 import { getPermitById, savePermit } from '../services/storage';
 import SignaturePad from '../components/SignaturePad';
@@ -32,6 +34,18 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     const [activeTab, setActiveTab] = useState<'details' | 'receiver' | 'photos' | 'issuer' | 'monitoring' | 'closeout'>('details');
 
     const cameraInputRef = useRef<HTMLInputElement>(null);
+    // Waits for pending images to load before opening the print dialog
+    const handleSafePrint = async () => {
+        const pending = Array.from(document.images).filter((img: HTMLImageElement) => !img.complete);
+        await Promise.all(pending.map((img: HTMLImageElement) => new Promise<void>(resolve => {
+            const done = () => { img.removeEventListener('load', done); img.removeEventListener('error', done); resolve(); };
+            img.addEventListener('load', done);
+            img.addEventListener('error', done);
+            if (img.complete) done();
+        })));
+        window.print();
+    };
+
     const galleryInputRef = useRef<HTMLInputElement>(null);
 
     const sessionRole = getUserRole().toLowerCase();
@@ -61,6 +75,8 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     }, [id]);
 
     const handleSave = async (updatedPermit: Permit) => {
+        if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); }
+        await new Promise(resolve => setTimeout(resolve, 100));
         setIsSaving(true);
         try {
             savePermit(updatedPermit);
@@ -107,6 +123,8 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     };
 
     const handleSaveAndIssue = async () => {
+        if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); }
+        await new Promise(resolve => setTimeout(resolve, 100));
         if (!permit) return;
 
         const isDetailsDone = permit.itwocxNumber && permit.dewateringLocation && permit.projectName && permit.requestingCompany && permit.siteEngineerSignature;
@@ -119,7 +137,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         if (!isIssuerDone) errors.push("- Issuer is missing signature.");
 
         if (errors.length > 0) {
-            alert(`🛑 CANNOT ISSUE PERMIT:\n\nPlease review the following missing information:\n\n${errors.join('\n')}`);
+            alert(`ðŸ›‘ CANNOT ISSUE PERMIT:\n\nPlease review the following missing information:\n\n${errors.join('\n')}\n\nMissing fields: ${JSON.stringify(errors)}`);
             return;
         }
 
@@ -133,9 +151,9 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
             savePermit(finalData);
             setPermit(finalData);
-            alert(`✅ Permit Saved Successfully\n\nPump Permit Issued and securely saved to Firebase.`);
+            alert("Permit successfully issued.");
         } catch (error: any) {
-            alert(`⚠️ Error saving permit to Firebase: ${error.message}`);
+            alert(`âš ï¸ Error saving permit: ${error.message}`);
         } finally { setIsSubmitting(false); }
     };
 
@@ -253,14 +271,14 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         try {
             await handleSave(updatedPermit);
 
-            alert("Permit closed. Generating PDF and securing to Firebase...");
+            
             await generateAndUploadPDF(updatedPermit);
 
-            alert("✅ Permit Saved Successfully\n\nPermit closed and securely saved to Firebase.");
+            alert("Permit successfully closed.");
             onBack();
         } catch (error: any) {
             console.error(error);
-            alert(`⚠️ Error saving permit to Firebase: ${error.message}`);
+            alert(`âš ï¸ Error saving permit: ${error.message}`);
         } finally {
             setIsSaving(false);
         }
@@ -279,11 +297,12 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
             <div className="flex justify-between items-center mb-6">
                 <button onClick={onBack} className="text-gray-500 font-bold bg-white px-4 py-2 rounded-lg shadow-sm border"><ArrowLeft size={16} className="inline mr-1" /> Back</button>
                 <div className="flex gap-2">
-                    <button onClick={() => window.print()} className="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg font-bold shadow-sm flex items-center gap-2 border">
+                    <button onClick={handleSafePrint} className="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg font-bold shadow-sm flex items-center gap-2 border">
                         <Printer size={16} /> Print
                     </button>
+                    <div style={{margin: '10px 0'}}><p style={{color: 'red', fontWeight: 'bold'}}>DEBUG STATE:</p><pre style={{fontSize: '10px', background: '#eee', padding: '10px', overflowX: 'auto', border: '2px solid red'}}> {JSON.stringify(permit, null, 2)} </pre></div>
                     {!isClosed && (
-                        <button onClick={() => handleSave(permit)} disabled={isSaving} className="bg-blue-600 text-white hover:bg-blue-700 px-6 py-2 rounded-lg font-bold shadow-sm flex items-center gap-2">
+                        <button type="button" onTouchStart={(e) => { if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); } }} onClick={(e) => { e.preventDefault(); setTimeout(() => handleSave(permit), 250); }} disabled={isSaving} className="bg-blue-600 text-white hover:bg-blue-700 px-6 py-2 rounded-lg font-bold shadow-sm flex items-center gap-2">
                             {isSaving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />} Save Progress
                         </button>
                     )}
@@ -325,50 +344,50 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
                 {activeTab === 'details' && (
                     <div className="animate-fade-in">
-                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
                             <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                                 <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">General Details</h3>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><input type="text" value={permit.itwocxNumber} onChange={(e) => updateField('itwocxNumber', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><input type="text" value={permit.projectName} onChange={(e) => updateField('projectName', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><DebouncedInput type="text" value={permit.itwocxNumber} onValueChange={v => updateField('itwocxNumber', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><DebouncedInput type="text" value={permit.projectName} onValueChange={v => updateField('projectName', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
 
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><input type="text" value={permit.requestingCompany} onChange={(e) => updateField('requestingCompany', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><DebouncedInput type="text" value={permit.requestingCompany} onValueChange={v => updateField('requestingCompany', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                                     <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Location to be dewatered *</label><input type="text" value={permit.dewateringLocation} onChange={(e) => { updateField('dewateringLocation', e.target.value); updateField('location', e.target.value); }} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
 
                                     <div className="md:col-span-2">
                                         <label className="block text-xs font-black mb-2 text-gray-600 uppercase">Description of area *</label>
-                                        <textarea value={permit.areaDescription} onChange={(e) => updateField('areaDescription', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={`${inputClass} h-24 resize-none`} />
+                                        <DebouncedTextArea value={permit.areaDescription} onValueChange={v => updateField('areaDescription', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={`${inputClass} h-24 resize-none`} />
                                     </div>
                                 </div>
 
                                 <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Person in Charge</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Name</label><input type="text" value={permit.personInChargeName} onChange={(e) => updateField('personInChargeName', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Contact Number</label><input type="text" value={permit.personInChargeContact} onChange={(e) => updateField('personInChargeContact', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Position</label><input type="text" value={permit.personInChargePosition} onChange={(e) => updateField('personInChargePosition', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Name</label><DebouncedInput type="text" value={permit.personInChargeName} onValueChange={v => updateField('personInChargeName', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Contact Number</label><DebouncedInput type="text" value={permit.personInChargeContact} onValueChange={v => updateField('personInChargeContact', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Position</label><DebouncedInput type="text" value={permit.personInChargePosition} onValueChange={v => updateField('personInChargePosition', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                                 </div>
 
                                 <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Pumping Details</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Impurities other than sediment</label><input type="text" value={permit.impurities} onChange={(e) => updateField('impurities', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Final Discharge Point</label><input type="text" value={permit.dischargePoint} onChange={(e) => updateField('dischargePoint', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Size of Pump / Rate / Volume</label><input type="text" value={permit.pumpSizeRateVolume} onChange={(e) => updateField('pumpSizeRateVolume', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pumping hours of operation</label><input type="text" value={permit.pumpingHours} onChange={(e) => updateField('pumpingHours', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Start Date</label><input type="date" value={permit.startDate} onChange={(e) => updateField('startDate', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Expiry Date</label><input type="date" value={permit.expiryDate} onChange={(e) => updateField('expiryDate', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Impurities other than sediment</label><DebouncedInput type="text" value={permit.impurities} onValueChange={v => updateField('impurities', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Final Discharge Point</label><DebouncedInput type="text" value={permit.dischargePoint} onValueChange={v => updateField('dischargePoint', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Size of Pump / Rate / Volume</label><DebouncedInput type="text" value={permit.pumpSizeRateVolume} onValueChange={v => updateField('pumpSizeRateVolume', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pumping hours of operation</label><DebouncedInput type="text" value={permit.pumpingHours} onValueChange={v => updateField('pumpingHours', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Start Date</label><SyncedDateInput value={permit.startDate} onValueChange={v => setPermit(prev => prev ? { ...prev, startDate: v, expiryDate: addDaysISO(v, 7) } : prev)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Expiry Date</label><SyncedDateInput value={permit.expiryDate} onValueChange={v => updateField('expiryDate', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                                 </div>
 
                                 <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Controls and Monitoring</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Inlet Controls</label><input type="text" value={permit.pumpInletControls} onChange={(e) => updateField('pumpInletControls', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Outlet Controls</label><input type="text" value={permit.pumpOutletControls} onChange={(e) => updateField('pumpOutletControls', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Sediment control intermediate</label><input type="text" value={permit.sedimentControlPoint} onChange={(e) => updateField('sedimentControlPoint', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Discharge criteria</label><input type="text" value={permit.dischargeCriteria} onChange={(e) => updateField('dischargeCriteria', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Location</label><input type="text" value={permit.monitoringLocation} onChange={(e) => updateField('monitoringLocation', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Frequency</label><input type="text" value={permit.monitoringFrequency} onChange={(e) => updateField('monitoringFrequency', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Other Monitoring Requirements</label><input type="text" value={permit.otherMonitoringRequirements} onChange={(e) => updateField('otherMonitoringRequirements', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Person responsible for monitoring</label><input type="text" value={permit.personResponsibleForMonitoring} onChange={(e) => updateField('personResponsibleForMonitoring', e.target.value)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Inlet Controls</label><DebouncedInput type="text" value={permit.pumpInletControls} onValueChange={v => updateField('pumpInletControls', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Outlet Controls</label><DebouncedInput type="text" value={permit.pumpOutletControls} onValueChange={v => updateField('pumpOutletControls', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Sediment control intermediate</label><DebouncedInput type="text" value={permit.sedimentControlPoint} onValueChange={v => updateField('sedimentControlPoint', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Discharge criteria</label><DebouncedInput type="text" value={permit.dischargeCriteria} onValueChange={v => updateField('dischargeCriteria', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Location</label><DebouncedInput type="text" value={permit.monitoringLocation} onValueChange={v => updateField('monitoringLocation', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Frequency</label><DebouncedInput type="text" value={permit.monitoringFrequency} onValueChange={v => updateField('monitoringFrequency', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Other Monitoring Requirements</label><DebouncedInput type="text" value={permit.otherMonitoringRequirements} onValueChange={v => updateField('otherMonitoringRequirements', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Person responsible for monitoring</label><DebouncedInput type="text" value={permit.personResponsibleForMonitoring} onValueChange={v => updateField('personResponsibleForMonitoring', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                                 </div>
 
                                 <div className="mt-8 border border-gray-300 p-6 rounded-2xl bg-gray-50 shadow-sm">
@@ -386,7 +405,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
                 {activeTab === 'receiver' && (
                     <div className="animate-fade-in">
-                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
                             <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                                 <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Permit Receiver Section</h3>
 
@@ -437,7 +456,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
                 {activeTab === 'issuer' && (
                     <div className="animate-fade-in">
-                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : ''}>
+                        <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
                             <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
                                 <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">Issuer Authorization</h3>
 
@@ -449,7 +468,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                         "The person authorising this permit must understand the project resource consents and ESCPs or Regional Plan Rules."
                                     </p>
 
-                                    <div className={(!isIssuer || isIssued || isClosed) ? 'pointer-events-none opacity-50' : ''}>
+                                    <div className={(!isIssuer || isIssued || isClosed) ? 'pointer-events-none opacity-50' : 'select-text pointer-events-auto'}>
                                         {permit.issuerSignature && (isIssued || isClosed) ? (
                                             <div className="text-center"><img src={permit.issuerSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.issuerSignature.name}</p></div>
                                         ) : (
@@ -458,7 +477,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                     </div>
 
                                     {!isIssued && !isClosed && (
-                                        <button onClick={handleSaveAndIssue} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
+                                        <button type="button" onTouchStart={(e) => { if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); } }} onClick={(e) => { e.preventDefault(); setTimeout(() => handleSaveAndIssue(), 250); }} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
                                             {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CheckCircle size={28} />}
                                             {isSubmitting ? 'Lodging PDF to iTwoCX...' : 'Issue Permit to CX'}
                                         </button>
@@ -508,7 +527,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                             <div className="grid grid-cols-[200px_1fr] border-b border-gray-300">
                                 <div className="bg-green-200 font-bold p-3 border-r border-gray-300">Monitoring frequency</div>
                                 <div className="p-0">
-                                    <input type="text" value={permit.monitoringFrequency || ''} onChange={e => updateField('monitoringFrequency', e.target.value)} disabled={isClosed} className="w-full h-full p-3 bg-white outline-none" placeholder="Enter frequency..." />
+                                    <DebouncedInput type="text" value={permit.monitoringFrequency || ''} onValueChange={v => updateField('monitoringFrequency', v)} disabled={isClosed} className="w-full h-full p-3 bg-white outline-none" placeholder="Enter frequency..." />
                                 </div>
                             </div>
 
@@ -537,14 +556,14 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                         {(permit.monitoringLogs || []).map(log => (
                                             <tr key={log.id} className="hover:bg-blue-50/50">
                                                 <td className="p-1 border border-gray-300"><input type="time" disabled={isClosed} value={log.time} onChange={e => updateMonitoringLog(log.id, 'time', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.mon} onChange={e => updateMonitoringLog(log.id, 'mon', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.tue} onChange={e => updateMonitoringLog(log.id, 'tue', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.wed} onChange={e => updateMonitoringLog(log.id, 'wed', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.thu} onChange={e => updateMonitoringLog(log.id, 'thu', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.fri} onChange={e => updateMonitoringLog(log.id, 'fri', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.staffMember} onChange={e => updateMonitoringLog(log.id, 'staffMember', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.monitoringLocation} onChange={e => updateMonitoringLog(log.id, 'monitoringLocation', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                                <td className="p-1 border border-gray-300"><input type="text" disabled={isClosed} value={log.comments} onChange={e => updateMonitoringLog(log.id, 'comments', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.mon} onValueChange={v => updateMonitoringLog(log.id, 'mon', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.tue} onValueChange={v => updateMonitoringLog(log.id, 'tue', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.wed} onValueChange={v => updateMonitoringLog(log.id, 'wed', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.thu} onValueChange={v => updateMonitoringLog(log.id, 'thu', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.fri} onValueChange={v => updateMonitoringLog(log.id, 'fri', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.staffMember} onValueChange={v => updateMonitoringLog(log.id, 'staffMember', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.monitoringLocation} onValueChange={v => updateMonitoringLog(log.id, 'monitoringLocation', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                                <td className="p-1 border border-gray-300"><DebouncedInput type="text" disabled={isClosed} value={log.comments} onValueChange={v => updateMonitoringLog(log.id, 'comments', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
                                                 {!isClosed && (
                                                     <td className="p-1 border border-gray-300 text-center">
                                                         <button onClick={() => removeMonitoringLog(log.id)} className="text-red-500 hover:text-red-700 p-1"><Trash2 size={14} /></button>
@@ -590,7 +609,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                     As the Person in Charge of Work I confirm that pumping activities described in this permit have now been completed.
                                 </div>
 
-                                <div className={!isIssuer ? 'pointer-events-none opacity-50' : ''}>
+                                <div className={!isIssuer ? 'pointer-events-none opacity-50' : 'select-text pointer-events-auto'}>
                                     <div className="mb-4">
                                         <label className="block text-xs font-black mb-2 text-gray-600 uppercase">Closeout Operator Name *</label>
                                         <input

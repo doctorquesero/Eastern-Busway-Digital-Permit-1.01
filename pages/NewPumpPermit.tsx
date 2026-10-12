@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { ArrowLeft, CheckCircle, Camera, ImageIcon, Loader2, Trash2, Briefcase, ShieldCheck, Users, CloudUpload, FileCheck, Plus } from 'lucide-react';
+import { DebouncedInput, DebouncedTextArea, SyncedSelect, SyncedDateInput } from '../components/DebouncedFields';
+import { addDaysISO } from '../utils/dateUtils';
 import { Permit, PermitPhoto, MonitoringLogEntry } from '../types';
 import { savePermit, getPermits } from '../services/storage';
 import SignaturePad from '../components/SignaturePad';
@@ -127,8 +129,10 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
     };
 
     const handleSaveProgress = async () => {
+        if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); }
+        await new Promise(resolve => setTimeout(resolve, 100));
         if (!formData.itwocxNumber) {
-            alert("⚠️ WARNING:\nPlease enter the ITWOCX Permit Number before syncing to the cloud so others can identify it.");
+            alert("âš ï¸ WARNING:\nPlease enter the ITWOCX Permit Number before syncing to the cloud so others can identify it.\n\nMissing field: itwocxNumber");
             return;
         }
 
@@ -142,29 +146,31 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                 isDraft: true
             }), { merge: true });
 
-            alert(`✅ DRAFT SYNCED SUCCESSFULLY!\n\nThe permit (PF#${formData.itwocxNumber}) has been saved to the cloud.\nThe rest of the team can now open it and fill out their sections.`);
+            alert(`âœ… DRAFT SYNCED SUCCESSFULLY!\n\nThe permit (PF#${formData.itwocxNumber}) has been saved to the cloud.\nThe rest of the team can now open it and fill out their sections.`);
         } catch (error: any) {
             console.error(error);
-            alert(`⚠️ Error syncing with Firebase:\n${error.message}\n\nPlease check your internet connection.`);
+            alert(`âš ï¸ Error syncing permit:\n${error.message}\n\nPlease check your internet connection.`);
         } finally {
             setIsSavingDraft(false);
         }
     };
 
     const handleSaveAndIssue = async () => {
+        if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); }
+        await new Promise(resolve => setTimeout(resolve, 100));
         let errors = [];
         if (!isDetailsDone) errors.push("- Details section is incomplete or missing signature.");
         if (!isReceiverDone) errors.push("- Receiver is missing signature.");
         if (!isIssuerDone) errors.push("- Issuer is missing signature.");
 
         if (errors.length > 0) {
-            alert(`🛑 CANNOT ISSUE PERMIT:\n\nPlease review the following missing information:\n\n${errors.join('\n')}`);
+            alert(`ðŸ›‘ CANNOT ISSUE PERMIT:\n\nPlease review the following missing information:\n\n${errors.join('\n')}\n\nMissing fields: ${JSON.stringify(errors)}`);
             return;
         }
 
         const rawNum = formData.itwocxNumber?.replace(/\D/g, "") || "";
         if (getPermits().some(p => (p.itwocxNumber || "").replace(/\D/g, "") === rawNum && p.id !== formData.id)) {
-            alert(`⚠️ STOP: Permit PF#${rawNum} already exists in the system!`); return;
+            alert(`âš ï¸ STOP: Permit PF#${rawNum} already exists in the system!`); return;
         }
 
         const finalData = { ...formData };
@@ -175,7 +181,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
         savePermit(finalData);
         setIsSubmitting(true);
 
-        const toast = { success: (msg: string) => alert(`✅ ${msg}`) };
+        const toast = { success: (msg: string) => alert(`âœ… ${msg}`) };
         try {
             const permitRef = doc(db, getTargetCollection(), finalData.id);
             await setDoc(permitRef, sanitizeForFirestore({
@@ -190,7 +196,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
             toast.success('Permit Saved Locally');
             onComplete();
         } catch (error: any) {
-            alert(`⚠️ Error saving permit to database: ${error.message}`);
+            alert(`âš ï¸ Error saving permit to database: ${error.message}`);
             onComplete();
         } finally { setIsSubmitting(false); }
     };
@@ -242,53 +248,54 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                     <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">General Details</h3>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><input type="text" value={formData.itwocxNumber} onChange={(e) => updateField('itwocxNumber', e.target.value)} className={inputClass} placeholder="e.g. 9130" /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><input type="text" value={formData.projectName} onChange={(e) => updateField('projectName', e.target.value)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><DebouncedInput type="text" value={formData.itwocxNumber} onValueChange={v => updateField('itwocxNumber', v)} className={inputClass} placeholder="e.g. 9130" /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><DebouncedInput type="text" value={formData.projectName} onValueChange={v => updateField('projectName', v)} className={inputClass} /></div>
 
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><input type="text" value={formData.requestingCompany} onChange={(e) => updateField('requestingCompany', e.target.value)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><DebouncedInput type="text" value={formData.requestingCompany} onValueChange={v => updateField('requestingCompany', v)} className={inputClass} /></div>
                         <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Location to be dewatered *</label><input type="text" value={formData.dewateringLocation} onChange={(e) => { updateField('dewateringLocation', e.target.value); updateField('location', e.target.value); }} className={inputClass} /></div>
 
                         <div className="md:col-span-2">
                             <label className="block text-xs font-black mb-2 text-gray-600 uppercase">Description of area *</label>
-                            <textarea value={formData.areaDescription} onChange={(e) => updateField('areaDescription', e.target.value)} className={`${inputClass} h-24 resize-none`} placeholder="Describe the area..." />
+                            <DebouncedTextArea value={formData.areaDescription} onValueChange={v => updateField('areaDescription', v)} className={`${inputClass} h-24 resize-none`} placeholder="Describe the area..." />
                         </div>
                     </div>
 
                     <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Person in Charge</h4>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Name</label><input type="text" value={formData.personInChargeName} onChange={(e) => updateField('personInChargeName', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Contact Number</label><input type="text" value={formData.personInChargeContact} onChange={(e) => updateField('personInChargeContact', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Position</label><input type="text" value={formData.personInChargePosition} onChange={(e) => updateField('personInChargePosition', e.target.value)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Name</label><DebouncedInput type="text" value={formData.personInChargeName} onValueChange={v => updateField('personInChargeName', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Contact Number</label><DebouncedInput type="text" value={formData.personInChargeContact} onValueChange={v => updateField('personInChargeContact', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Position</label><DebouncedInput type="text" value={formData.personInChargePosition} onValueChange={v => updateField('personInChargePosition', v)} className={inputClass} /></div>
                     </div>
 
                     <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Pumping Details</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Impurities other than sediment</label><input type="text" value={formData.impurities} onChange={(e) => updateField('impurities', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Final Discharge Point</label><input type="text" value={formData.dischargePoint} onChange={(e) => updateField('dischargePoint', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Size of Pump / Rate / Volume</label><input type="text" value={formData.pumpSizeRateVolume} onChange={(e) => updateField('pumpSizeRateVolume', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pumping hours of operation</label><input type="text" value={formData.pumpingHours} onChange={(e) => updateField('pumpingHours', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Start Date</label><input type="date" value={formData.startDate} onChange={(e) => updateField('startDate', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Expiry Date</label><input type="date" value={formData.expiryDate} onChange={(e) => updateField('expiryDate', e.target.value)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Impurities other than sediment</label><DebouncedInput type="text" value={formData.impurities} onValueChange={v => updateField('impurities', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Final Discharge Point</label><DebouncedInput type="text" value={formData.dischargePoint} onValueChange={v => updateField('dischargePoint', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Size of Pump / Rate / Volume</label><DebouncedInput type="text" value={formData.pumpSizeRateVolume} onValueChange={v => updateField('pumpSizeRateVolume', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pumping hours of operation</label><DebouncedInput type="text" value={formData.pumpingHours} onValueChange={v => updateField('pumpingHours', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Start Date</label><SyncedDateInput value={formData.startDate} onValueChange={v => { updateField('startDate', v); updateField('expiryDate', addDaysISO(v, 7)); }} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Expiry Date</label><SyncedDateInput value={formData.expiryDate} onValueChange={v => updateField('expiryDate', v)} className={inputClass} /></div>
                     </div>
 
                     <h4 className="font-black text-lg text-gray-800 mb-4 border-b pb-2">Controls and Monitoring</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Inlet Controls</label><input type="text" value={formData.pumpInletControls} onChange={(e) => updateField('pumpInletControls', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Outlet Controls</label><input type="text" value={formData.pumpOutletControls} onChange={(e) => updateField('pumpOutletControls', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Sediment control intermediate</label><input type="text" value={formData.sedimentControlPoint} onChange={(e) => updateField('sedimentControlPoint', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Discharge criteria</label><input type="text" value={formData.dischargeCriteria} onChange={(e) => updateField('dischargeCriteria', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Location</label><input type="text" value={formData.monitoringLocation} onChange={(e) => updateField('monitoringLocation', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Frequency</label><input type="text" value={formData.monitoringFrequency} onChange={(e) => updateField('monitoringFrequency', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Other Monitoring Requirements</label><input type="text" value={formData.otherMonitoringRequirements} onChange={(e) => updateField('otherMonitoringRequirements', e.target.value)} className={inputClass} /></div>
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Person responsible for monitoring</label><input type="text" value={formData.personResponsibleForMonitoring} onChange={(e) => updateField('personResponsibleForMonitoring', e.target.value)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Inlet Controls</label><DebouncedInput type="text" value={formData.pumpInletControls} onValueChange={v => updateField('pumpInletControls', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Pump Outlet Controls</label><DebouncedInput type="text" value={formData.pumpOutletControls} onValueChange={v => updateField('pumpOutletControls', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Sediment control intermediate</label><DebouncedInput type="text" value={formData.sedimentControlPoint} onValueChange={v => updateField('sedimentControlPoint', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Discharge criteria</label><DebouncedInput type="text" value={formData.dischargeCriteria} onValueChange={v => updateField('dischargeCriteria', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Location</label><DebouncedInput type="text" value={formData.monitoringLocation} onValueChange={v => updateField('monitoringLocation', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Monitoring Frequency</label><DebouncedInput type="text" value={formData.monitoringFrequency} onValueChange={v => updateField('monitoringFrequency', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Other Monitoring Requirements</label><DebouncedInput type="text" value={formData.otherMonitoringRequirements} onValueChange={v => updateField('otherMonitoringRequirements', v)} className={inputClass} /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Person responsible for monitoring</label><DebouncedInput type="text" value={formData.personResponsibleForMonitoring} onValueChange={v => updateField('personResponsibleForMonitoring', v)} className={inputClass} /></div>
                     </div>
 
                     <div className="mt-8 border border-gray-300 p-6 rounded-2xl bg-gray-50 shadow-sm">
                         <p className="text-center font-black uppercase text-xs mb-4 tracking-widest text-gray-500">Requester Signature</p>
                         <SignaturePad label="Sign here to complete Details" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={formData.siteEngineerSignature} />
 
-                        <button
-                            onClick={handleSaveProgress}
+                        <div style={{margin: '10px 0'}}><p style={{color: 'red', fontWeight: 'bold'}}>DEBUG STATE:</p><pre style={{fontSize: '10px', background: '#eee', padding: '10px', overflowX: 'auto', border: '2px solid red'}}> {JSON.stringify(formData, null, 2)} </pre></div>
+
+                        <button type='button' onTouchStart={(e) => { if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); } }} onClick={(e) => { e.preventDefault(); setTimeout(() => handleSaveProgress(), 250); }}
                             disabled={isSavingDraft}
                             className="mt-6 w-full py-4 rounded-xl font-black uppercase flex items-center justify-center gap-3 transition-all bg-blue-600 text-white shadow-lg hover:bg-blue-700 active:scale-95"
                         >
@@ -311,8 +318,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                             <SignaturePad label="Sign here to receive permit" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={formData.receiverSignature} />
                         </div>
 
-                        <button
-                            onClick={handleSaveProgress}
+                        <button type='button' onTouchStart={(e) => { if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); } }} onClick={(e) => { e.preventDefault(); setTimeout(() => handleSaveProgress(), 250); }}
                             disabled={isSavingDraft}
                             className="mt-6 w-full py-4 rounded-xl font-black uppercase flex items-center justify-center gap-3 transition-all bg-blue-600 text-white shadow-lg hover:bg-blue-700 active:scale-95"
                         >
@@ -360,11 +366,13 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                             "The person authorising this permit must understand the project resource consents and ESCPs or Regional Plan Rules."
                         </p>
 
-                        <div className={!isIssuer ? 'pointer-events-none opacity-50' : ''}>
+                        <div className={!isIssuer ? 'pointer-events-none opacity-50' : 'select-text pointer-events-auto'}>
                             <SignaturePad label="Issuer Name to Execute Permit *" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={formData.issuerSignature} />
                         </div>
 
-                        <button onClick={handleSaveAndIssue} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
+                        <div style={{margin: '10px 0'}}><p style={{color: 'red', fontWeight: 'bold'}}>DEBUG STATE:</p><pre style={{fontSize: '10px', background: '#eee', padding: '10px', overflowX: 'auto', border: '2px solid red'}}> {JSON.stringify(formData, null, 2)} </pre></div>
+
+                        <button type="button" onTouchStart={(e) => { if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); } }} onClick={(e) => { e.preventDefault(); setTimeout(() => handleSaveAndIssue(), 250); }} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
                             {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CheckCircle size={28} />}
                             {isSubmitting ? 'Lodging PDF to iTwoCX...' : 'Issue Permit to CX'}
                         </button>
@@ -402,7 +410,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                         <div className="grid grid-cols-[200px_1fr] border-b border-gray-300">
                             <div className="bg-green-200 font-bold p-3 border-r border-gray-300">Monitoring frequency</div>
                             <div className="p-0">
-                                <input type="text" value={formData.monitoringFrequency || ''} onChange={e => updateField('monitoringFrequency', e.target.value)} className="w-full h-full p-3 bg-white outline-none" placeholder="Enter frequency..." />
+                                <DebouncedInput type="text" value={formData.monitoringFrequency || ''} onValueChange={v => updateField('monitoringFrequency', v)} className="w-full h-full p-3 bg-white outline-none" placeholder="Enter frequency..." />
                             </div>
                         </div>
 
@@ -431,14 +439,14 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                                     {(formData.monitoringLogs || []).map(log => (
                                         <tr key={log.id} className="hover:bg-blue-50/50">
                                             <td className="p-1 border border-gray-300"><input type="time" value={log.time} onChange={e => updateMonitoringLog(log.id, 'time', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.mon} onChange={e => updateMonitoringLog(log.id, 'mon', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.tue} onChange={e => updateMonitoringLog(log.id, 'tue', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.wed} onChange={e => updateMonitoringLog(log.id, 'wed', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.thu} onChange={e => updateMonitoringLog(log.id, 'thu', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.fri} onChange={e => updateMonitoringLog(log.id, 'fri', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.staffMember} onChange={e => updateMonitoringLog(log.id, 'staffMember', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.monitoringLocation} onChange={e => updateMonitoringLog(log.id, 'monitoringLocation', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
-                                            <td className="p-1 border border-gray-300"><input type="text" value={log.comments} onChange={e => updateMonitoringLog(log.id, 'comments', e.target.value)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.mon} onValueChange={v => updateMonitoringLog(log.id, 'mon', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.tue} onValueChange={v => updateMonitoringLog(log.id, 'tue', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.wed} onValueChange={v => updateMonitoringLog(log.id, 'wed', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.thu} onValueChange={v => updateMonitoringLog(log.id, 'thu', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.fri} onValueChange={v => updateMonitoringLog(log.id, 'fri', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.staffMember} onValueChange={v => updateMonitoringLog(log.id, 'staffMember', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.monitoringLocation} onValueChange={v => updateMonitoringLog(log.id, 'monitoringLocation', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
+                                            <td className="p-1 border border-gray-300"><DebouncedInput type="text" value={log.comments} onValueChange={v => updateMonitoringLog(log.id, 'comments', v)} className="w-full p-1 text-xs outline-none bg-transparent" /></td>
                                             <td className="p-1 border border-gray-300 text-center">
                                                 <button onClick={() => removeMonitoringLog(log.id)} className="text-red-500 hover:text-red-700 p-1"><Trash2 size={14} /></button>
                                             </td>
@@ -482,7 +490,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                                     type="date"
                                     className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                                     value={formData.closureDate ? formData.closureDate.split('T')[0] : ''}
-                                    onChange={(e) => updateField('closureDate', new Date(e.target.value).toISOString())}
+                                    onChange={(e) => updateField('closureDate', e.target.value ? new Date(`T00:00:00Z`).toISOString() : '')}
                                 />
                             </div>
                             <SignaturePad label="Closeout Signature *" onSave={(sig) => updateField('closureSignature', sig)} initialValue={formData.closureSignature} />

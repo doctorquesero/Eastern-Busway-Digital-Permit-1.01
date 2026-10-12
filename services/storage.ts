@@ -8,8 +8,25 @@ import { sanitizeForFirestore } from '../utils/firestore';
 const STORAGE_KEY = 'eba_permits_db_v3';
 
 // 1. Cargamos la memoria del navegador al instante
-const initialData = localStorage.getItem(STORAGE_KEY);
-let localPermitsCache: Permit[] = initialData ? JSON.parse(initialData) : [];
+const readStoredPermits = (): Permit[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error('Local permit cache unavailable:', e);
+    return [];
+  }
+};
+// iOS Safari (private mode / quota) throws on localStorage access; the in-memory cache must keep working
+const writeStoredPermits = (permits: Permit[]) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(permits));
+  } catch (e) {
+    console.error('Local permit cache write failed:', e);
+  }
+};
+
+let localPermitsCache: Permit[] = readStoredPermits();
 
 // 2. ESCUCHA EN TIEMPO REAL A FIREBASE
 onSnapshot(collection(db, getTargetCollection()), (snapshot) => {
@@ -20,10 +37,12 @@ onSnapshot(collection(db, getTargetCollection()), (snapshot) => {
 
   // Actualizamos nuestra memoria local con los datos frescos de la nube
   localPermitsCache = permits;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(permits));
+  writeStoredPermits(permits);
 
   // Emitimos un evento personalizado
   window.dispatchEvent(new Event('firebase-data-updated'));
+}, (error) => {
+  console.error('Firestore listener error:', error);
 });
 
 // ============================================================================
@@ -49,7 +68,7 @@ export const savePermit = (permit: Permit): void => {
   } else {
     localPermitsCache.push(permit);
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(localPermitsCache));
+  writeStoredPermits(localPermitsCache);
 
   // 2. GUARDADO EN LA NUBE (En segundo plano)
   const cleanPermitForFirebase = sanitizeForFirestore(permit);

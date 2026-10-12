@@ -16,7 +16,7 @@ export const DemoBanner: React.FC = () => {
     if (!isDemo) return null;
 
     return (
-        <div style={{
+        <div className="print:hidden" style={{
             backgroundColor: '#ea580c', // Naranja brillante de alerta
             color: 'white',
             textAlign: 'center',

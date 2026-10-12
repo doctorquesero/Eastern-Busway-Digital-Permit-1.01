@@ -16,6 +16,22 @@ export interface PermitPDFLayoutProps {
     CEASE_WORKS_ITEMS: { id: string; text: string }[];
 }
 
+// Legacy records may hold {text, timestamp, author} objects where a string is expected
+const txt = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return value.map(txt).filter(Boolean).join('\n');
+    if (typeof value === 'object') {
+        const v = value as Record<string, unknown>;
+        if ('text' in v) return txt(v.text);
+        return '';
+    }
+    return '';
+};
+
+const PHOTOS_PER_PAGE = 6;
+
 const Page: React.FC<{ children: React.ReactNode, pageNum: number | string }> = ({ children, pageNum }) => (
     <div className="pdf-page bg-white box-border mx-auto relative flex flex-col"
         style={{ width: '210mm', height: '296mm', padding: '12mm 15mm', pageBreakAfter: 'always', pageBreakInside: 'avoid', overflow: 'hidden' }}>
@@ -125,7 +141,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
         receiverName: permit?.receiverName || 'N/A',
         receiverEmail: permit?.receiverEmail || 'N/A',
         receiverSignature: permit?.receiverSignature || null,
-        otherNotes: permit?.otherNotes || 'N/A'
+        otherNotes: txt(permit?.otherNotes) || 'N/A'
     } as Permit;
 
     const pNum = String(safePermit?.itwocxNumber || safePermit?.permitNumber || 'N/A').replace(/\D/g, '') || 'N/A';
@@ -141,8 +157,8 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
         });
     }
     const photoPages = [];
-    for (let i = 0; i < photos.length; i += 2) {
-        photoPages.push(photos.slice(i, i + 2));
+    for (let i = 0; i < photos.length; i += PHOTOS_PER_PAGE) {
+        photoPages.push(photos.slice(i, i + PHOTOS_PER_PAGE));
     }
 
     return (
@@ -159,7 +175,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
 
             {/* === PAGE 1 === */}
             <Page pageNum={1}>
-                <div className="flex flex-col items-center justify-center h-full text-center pb-32">
+                <div className="flex flex-col items-center justify-start text-center pt-12" style={{ minHeight: '200mm' }}>
                     <h1 className="text-4xl font-black text-blue-800 mb-6 uppercase">Breaking Ground Permit</h1>
                     <p className="text-xl font-bold mb-2">Permit Reference: PF#{pNum}</p>
                     <p className="text-lg text-gray-700 mb-12">Location: {safePermit?.location || 'N/A'}</p>
@@ -174,9 +190,9 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         <p className="text-xs mb-1">Generated on: {new Date().toLocaleString()}</p>
                         <p className="text-xs mb-1">Status: <span className="font-black uppercase">{safePermit?.status || 'N/A'}</span></p>
                         <div className="mt-4 pt-3 border-t border-blue-200 text-xs space-y-1">
-                            <p><span className="font-bold">Permit Issued Date:</span> {safePermit.issuedDate || 'N/A'}</p>
-                            <p><span className="font-bold">Permit Commencement Date:</span> {safePermit.commencementDate || 'N/A'}</p>
-                            <p><span className="font-bold">Permit End Date:</span> {safePermit.endDate || 'N/A'}</p>
+                            <p><span className="font-bold">Permit Issued Date:</span> {txt(safePermit.issuedDate) || 'N/A'}</p>
+                            <p><span className="font-bold">Permit Commencement Date:</span> {txt(safePermit.commencementDate) || 'N/A'}</p>
+                            <p><span className="font-bold">Permit End Date:</span> {txt(safePermit.endDate) || 'N/A'}</p>
                         </div>
                         <p className="text-xs mt-4 italic text-gray-600">This digital record replaces the printed CX Form. The form must be printed using a scale of 70% if hardcopy is required. No resolution is lost.</p>
                     </div>
@@ -242,34 +258,34 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         <tr>
                             <td className="border border-black p-1 font-medium">Has the area for this permit been scanned</td>
                             <td className="border border-black p-1 font-bold text-right"><YNBox checked={permit.knownServicesScanned === 'yes'} label="Y" /><YNBox checked={permit.knownServicesScanned === 'no'} label="N" /><YNBox checked={permit.knownServicesScanned === 'n/a'} label="N/A" /></td>
-                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.knownServicesScanned || ''}</td>
+                            <td className="border border-black p-1 text-[8px]">{txt(permit.issuerComments?.knownServicesScanned)}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">Known active services physically marked out on site.</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.servicesMarked === 'yes'} label="Y" /><YNBox checked={permit.servicesMarked === 'no'} label="N" /><YNBox checked={permit.servicesMarked === 'n/a'} label="N/A" /></td>
-                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.servicesMarked || ''}</td>
+                            <td className="border border-black p-1 text-[8px]">{txt(permit.issuerComments?.servicesMarked)}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">If you are potholing have you got depth markers for holes when back filling?</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.potholingMarkers === 'yes'} label="Y" /><YNBox checked={permit.potholingMarkers === 'no'} label="N" /><YNBox checked={permit.potholingMarkers === 'n/a'} label="N/A" /></td>
-                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.potholingMarkers || ''}</td>
+                            <td className="border border-black p-1 text-[8px]">{txt(permit.issuerComments?.potholingMarkers)}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">Is the work within the Transpower Designation Area &amp; a S176 is in place?</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.transpowerDesignation === 'yes'} label="Y" /><YNBox checked={permit.transpowerDesignation === 'no'} label="N" /><YNBox checked={permit.transpowerDesignation === 'n/a'} label="N/A" /></td>
-                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.transpowerDesignation || ''}</td>
+                            <td className="border border-black p-1 text-[8px]">{txt(permit.issuerComments?.transpowerDesignation)}</td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 font-medium">Have the works complied with Watercare's "Works Over Approval" form, for distances of 2 meters or less from pipelines &lt;375 mm and 10 meters or less from pipelines ≥375 mm according to the COP?</td>
                             <td className="border border-black p-1 text-right font-bold"><YNBox checked={permit.watercareWorksOver === 'yes'} label="Y" /><YNBox checked={permit.watercareWorksOver === 'no'} label="N" /><YNBox checked={permit.watercareWorksOver === 'n/a'} label="N/A" /></td>
-                            <td className="border border-black p-1 text-[8px]">{permit.issuerComments?.watercareWorksOver || ''}</td>
+                            <td className="border border-black p-1 text-[8px]">{txt(permit.issuerComments?.watercareWorksOver)}</td>
                         </tr>
                     </tbody>
                 </table>
 
                 <div className="border border-black flex-grow flex flex-col mb-4">
                     <div className="bg-gray-100 font-bold text-[10px] p-1 border-b border-black shrink-0">Scope of works for excavation (To be filled out by the Engineer):</div>
-                    <div className="p-2 text-[10px] font-medium whitespace-pre-wrap flex-grow">{permit.scopeOfWorks}</div>
+                    <div className="p-2 text-[10px] font-medium whitespace-pre-wrap flex-grow">{txt(permit.scopeOfWorks)}</div>
                 </div>
 
                 <EBASignature title="Permit Issuer" sig={permit.issuerSignature} />
@@ -288,22 +304,22 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                     <tbody>
                         {partAItems.slice(0, 4).map(item => (
                             <tr key={item.id}>
-                                <td className="border border-black p-1 text-center font-bold">{item.id.replace(/[a-z]/g, '')}.</td>
+                                <td className="border border-black p-1 text-center font-bold">{String(item.id ?? '').replace(/[a-z]/g, '')}.</td>
                                 <td className="border border-black p-1">{item.question}</td>
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'yes'} /></div></td>
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'no'} /></div></td>
-                                <td className="border border-black p-1 text-[8px]">{item.comment}</td>
+                                <td className="border border-black p-1 text-[8px]">{txt(item.comment)}</td>
                             </tr>
                         ))}
                         <tr>
                             <td className="border border-black p-1 text-center font-bold align-top">4.</td>
-                            <td className="border border-black p-1 align-top" colSpan={4}>Based on the risk of this job/site, what type of potholing is to be completed on this job (e.g. hydro or air excavation, hand digging, etc.) List the tools being used for potholing.<br /><div className="mt-2 text-blue-800 font-bold">{permit.partAPotholingMethod}</div></td>
+                            <td className="border border-black p-1 align-top" colSpan={4}>Based on the risk of this job/site, what type of potholing is to be completed on this job (e.g. hydro or air excavation, hand digging, etc.) List the tools being used for potholing.<br /><div className="mt-2 text-blue-800 font-bold">{txt(permit.partAPotholingMethod)}</div></td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 text-center font-bold align-top">5.</td>
                             <td className="border border-black p-1 p-0 align-top" colSpan={4}>
                                 <div className="p-1">If applicable, what is the frequency of the potholing/slotting to be done to identify the applicable services?</div>
-                                <div className="border-t border-black grid grid-cols-2 text-center divide-x divide-black bg-gray-50"><div className="p-1">{permit.partAFrequency} Meters between slots</div><div className="p-1">{!permit.partAFrequency ? 'Not applicable' : ''}</div></div>
+                                <div className="border-t border-black grid grid-cols-2 text-center divide-x divide-black bg-gray-50"><div className="p-1">{txt(permit.partAFrequency)} Meters between slots</div><div className="p-1">{!permit.partAFrequency ? 'Not applicable' : ''}</div></div>
                             </td>
                         </tr>
                         <tr>
@@ -316,24 +332,24 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                                 <table className="w-full text-[9px] border-t border-black text-left">
                                     <thead className="bg-gray-100"><tr><th className="border-r border-black p-1 w-1/4">Overhead</th><th className="border-r border-black p-1 w-1/4">Distance</th><th className="border-r border-black p-1 w-1/4">Underground</th><th className="p-1 w-1/4">Distance</th></tr></thead>
                                     <tbody>
-                                        <tr className="border-t border-black"><td className="border-r border-black p-1">Electricity:</td><td className="border-r border-black p-1 font-bold">{permit.partACloseApproach?.overheadElectricityDist}</td><td className="border-r border-black p-1">Electricity:</td><td className="p-1 font-bold">{permit.partACloseApproach?.undergroundElectricityDist}</td></tr>
-                                        <tr className="border-t border-black"><td className="border-r border-black p-1">Rail:</td><td className="border-r border-black p-1 font-bold">{permit.partACloseApproach?.overheadRailDist}</td><td className="border-r border-black p-1">Fibre:</td><td className="p-1 font-bold">{permit.partACloseApproach?.undergroundFibreDist}</td></tr>
-                                        <tr className="border-t border-black"><td className="border-r border-black p-1">Other:</td><td className="border-r border-black p-1 font-bold">{permit.partACloseApproach?.overheadOtherDist}</td><td className="border-r border-black p-1">Gas:</td><td className="p-1 font-bold">{permit.partACloseApproach?.undergroundGasDist}</td></tr>
-                                        <tr className="border-t border-black"><td className="border-r border-black p-1 bg-gray-50"></td><td className="border-r border-black p-1 bg-gray-50"></td><td className="border-r border-black p-1">Water or other:</td><td className="p-1 font-bold">{permit.partACloseApproach?.undergroundWaterDist}</td></tr>
+                                        <tr className="border-t border-black"><td className="border-r border-black p-1">Electricity:</td><td className="border-r border-black p-1 font-bold">{txt(permit.partACloseApproach?.overheadElectricityDist)}</td><td className="border-r border-black p-1">Electricity:</td><td className="p-1 font-bold">{txt(permit.partACloseApproach?.undergroundElectricityDist)}</td></tr>
+                                        <tr className="border-t border-black"><td className="border-r border-black p-1">Rail:</td><td className="border-r border-black p-1 font-bold">{txt(permit.partACloseApproach?.overheadRailDist)}</td><td className="border-r border-black p-1">Fibre:</td><td className="p-1 font-bold">{txt(permit.partACloseApproach?.undergroundFibreDist)}</td></tr>
+                                        <tr className="border-t border-black"><td className="border-r border-black p-1">Other:</td><td className="border-r border-black p-1 font-bold">{txt(permit.partACloseApproach?.overheadOtherDist)}</td><td className="border-r border-black p-1">Gas:</td><td className="p-1 font-bold">{txt(permit.partACloseApproach?.undergroundGasDist)}</td></tr>
+                                        <tr className="border-t border-black"><td className="border-r border-black p-1 bg-gray-50"></td><td className="border-r border-black p-1 bg-gray-50"></td><td className="border-r border-black p-1">Water or other:</td><td className="p-1 font-bold">{txt(permit.partACloseApproach?.undergroundWaterDist)}</td></tr>
                                     </tbody>
                                 </table>
                             </td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 text-center font-bold">7.</td>
-                            <td className="border border-black p-1" colSpan={4}>What means of overhead service protection have I provided for this job?<br /><div className="mt-1 text-blue-800 font-bold">{permit.partAOverheadProtection}</div></td>
+                            <td className="border border-black p-1" colSpan={4}>What means of overhead service protection have I provided for this job?<br /><div className="mt-1 text-blue-800 font-bold">{txt(permit.partAOverheadProtection)}</div></td>
                         </tr>
                         <tr>
                             <td className="border border-black p-1 text-center font-bold">8.</td>
                             <td className="border border-black p-1">{partAItems.find(i => i.id === '8')?.question}</td>
                             <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={partAItems.find(i => i.id === '8')?.answer === 'yes'} /></div></td>
                             <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={partAItems.find(i => i.id === '8')?.answer === 'no'} /></div></td>
-                            <td className="border border-black p-1 text-[8px]">{partAItems.find(i => i.id === '8')?.comment}</td>
+                            <td className="border border-black p-1 text-[8px]">{txt(partAItems.find(i => i.id === '8')?.comment)}</td>
                         </tr>
                     </tbody>
                 </table>
@@ -368,7 +384,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'yes'} /></div></td>
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'no'} /></div></td>
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'n/a'} /></div></td>
-                                <td className="border border-black p-1 text-[8px] text-center">{item.comment}</td>
+                                <td className="border border-black p-1 text-[8px] text-center">{txt(item.comment)}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -376,14 +392,14 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <p className="text-[9px] font-bold text-center border p-2 mb-2 bg-gray-50">NOTE: Any unidentified service found, must be treated as live until confirmed otherwise.</p>
 
                 {/* Approver Comments Block */}
-                {permit.approverComments && Object.values(permit.approverComments).some(v => v && v.trim()) && (
+                {permit.approverComments && Object.values(permit.approverComments).some(v => txt(v).trim()) && (
                     <div className="border border-black mb-2">
                         <div className="bg-blue-600 text-white font-bold text-[9px] p-1">Approver Comments</div>
                         <table className="w-full text-[9px] border-collapse">
                             <tbody>
                                 {partBItems.map(item => {
-                                    const comment = permit.approverComments?.[item.id];
-                                    if (!comment || !comment.trim()) return null;
+                                    const comment = txt(permit.approverComments?.[item.id]);
+                                                                        if (!comment.trim()) return null;
                                     return (
                                         <tr key={item.id}>
                                             <td className="border-b border-black p-1 font-bold w-8 text-center align-top">{item.id}.</td>
@@ -416,7 +432,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                                 <td className="border border-black p-1">{item.question}</td>
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'yes'} /></div></td>
                                 <td className="border border-black p-0"><div className="flex justify-center"><CheckBox checked={item.answer === 'no'} /></div></td>
-                                <td className="border border-black p-1 text-[8px] text-center">{item.comment}</td>
+                                <td className="border border-black p-1 text-[8px] text-center">{txt(item.comment)}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -436,7 +452,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         {CEASE_WORKS_ITEMS.map(item => (
                             <tr key={item.id}>
                                 <td className="border border-black p-2 text-center w-8 font-bold">{item.id}.</td>
-                                <td className="border border-black p-2 leading-relaxed text-[11px]"><span dangerouslySetInnerHTML={{ __html: item.text.replace(/must stop/g, '<strong>must stop</strong>').replace(/before/g, '<strong>before</strong>').replace(/reviewed/g, '<strong>reviewed</strong>').replace(/signed/g, '<strong>signed</strong>') }} /></td>
+                                <td className="border border-black p-2 leading-relaxed text-[11px]"><span dangerouslySetInnerHTML={{ __html: String(item.text ?? '').replace(/must stop/g, '<strong>must stop</strong>').replace(/before/g, '<strong>before</strong>').replace(/reviewed/g, '<strong>reviewed</strong>').replace(/signed/g, '<strong>signed</strong>') }} /></td>
                             </tr>
                         ))}
                     </tbody>
@@ -600,7 +616,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                     <div className="flex items-start gap-2"><div className="mt-0.5"><CheckBox checked={permit.closureChecklistExcavationSafe || false} /></div><span className="font-bold">The authorised excavation has been completed and the work site has been left in a safe condition.</span></div>
                     <div className="flex items-start gap-2"><div className="mt-0.5"><CheckBox checked={permit.closureChecklistAsBuiltReturned || false} /></div><span className="font-bold">The site services plan has been accurately As Built for all new services and returned to the Site Services Coordinator.</span></div>
                     <div className="flex items-start gap-2"><div className="mt-0.5"><CheckBox checked={permit.closureChecklistOutstandingWorks || false} /></div><span className="font-bold">• The work has not been completed and the following remains outstanding:</span></div>
-                    {permit.closureChecklistOutstandingWorks && <div className="ml-6 p-2 border border-gray-400 min-h-[40px] italic font-medium">{permit.closureOutstandingWorksDetails}</div>}
+                    {permit.closureChecklistOutstandingWorks && <div className="ml-6 p-2 border border-gray-400 min-h-[40px] italic font-medium">{txt(permit.closureOutstandingWorksDetails)}</div>}
                 </div>
 
                 <EBASignature title="Permit Receiver" sig={permit.closureSignature} date={permit.closureDate ? new Date(permit.closureDate).toLocaleDateString() : ''} initialTitle="Time" />
@@ -631,11 +647,11 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
 
                 <div className="border border-black min-h-[300px] flex flex-col mt-4">
                     <div className="bg-gray-100 font-bold text-[10px] p-1 border-b border-black shrink-0">Other Notes (these notes are not to be conditional comments)</div>
-                    <div className="p-2 text-[10px] whitespace-pre-wrap flex-grow">{safePermit?.otherNotes || 'N/A'}</div>
+                    <div className="p-2 text-[10px] whitespace-pre-wrap flex-grow">{txt(safePermit?.otherNotes) || 'N/A'}</div>
                 </div>
             </Page>
 
-            {/* === PÁGINAS ADICIONALES: FOTOS (2 por página) === */}
+            {/* === PÁGINAS ADICIONALES: FOTOS (6 por página, cuadrícula 2x3) === */}
             {(permit.dailySignOffUrl || permit.crewRegistrationUrl) && (
                 <Page pageNum={13}>
                     <h2 className="text-xl font-bold text-blue-800 mb-6 uppercase border-b-2 border-gray-300 pb-2">Closure Evidence</h2>
@@ -656,19 +672,21 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 </Page>
             )}
 
-            {photoPages.map((photoPair, index) => (
+            {photoPages.map((pagePhotos, index) => (
                 <Page key={`photo-page-${index}`} pageNum={permit.dailySignOffUrl || permit.crewRegistrationUrl ? `14.${index + 1}` : `13.${index + 1}`}>
-                    <h2 className="text-xl font-bold text-blue-800 mb-6 uppercase border-b-2 border-gray-300 pb-2">Photographic Evidence - Part {index + 1}</h2>
-                    <div className="flex flex-col gap-8 h-full">
-                        {photoPair.map(p => (
-                            <div key={p.id} className="border-2 border-black p-2 text-center rounded bg-gray-50 flex-1 flex flex-col">
-                                <img crossOrigin="anonymous" src={p.url} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '400px' }} alt="evidence" />
-                                <p className="font-black text-[12px] uppercase bg-white p-2 border border-black shrink-0">{p.caption}</p>
+                    <h2 className="text-xl font-bold text-blue-800 mb-4 uppercase border-b-2 border-gray-300 pb-2 shrink-0">Photographic Evidence - Part {index + 1}</h2>
+                    <div className="grid grid-cols-2 gap-3 content-start">
+                        {pagePhotos.map(p => (
+                            <div key={p.id} className="border-2 border-black rounded bg-gray-50 flex flex-col overflow-hidden box-border" style={{ height: '63mm', padding: '2mm' }}>
+                                <div className="flex items-center justify-center overflow-hidden" style={{ height: '49mm' }}>
+                                    <img crossOrigin="anonymous" src={p.url} alt="evidence" style={{ maxWidth: '100%', maxheight: '49mm', objectFit: 'contain' }} />
+                                </div>
+                                <p className="font-black text-[9px] uppercase bg-white border border-black mt-1 px-1 py-0.5 leading-tight overflow-hidden" style={{ height: '9mm' }}>{txt(p.caption)}</p>
                             </div>
                         ))}
-                    </div>
-                </Page>
-            ))}
+                                </div>
+                            </Page>
+                        ))}
 
         </div>
     );

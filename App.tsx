@@ -15,6 +15,25 @@ import ebLogo from './assets/eb-logo.png';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, authPersistence } from './firebase';
 
+class RouteErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error) { console.error('Route render crashed:', error); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="p-8 text-center">
+        <h2 className="text-xl font-black text-red-700 uppercase mb-2">Something went wrong</h2>
+        <p className="text-sm text-gray-700 mb-4 break-words">{this.state.error.message}</p>
+        <button onClick={() => { window.location.hash = '#/'; window.location.reload(); }} className="bg-blue-700 text-white px-6 py-3 rounded-xl font-black uppercase">Back to Dashboard</button>
+      </div>
+    );
+  }
+}
+
 const PermitDetailContainer = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -42,8 +61,8 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
   return (
     <>
       <DemoBanner />
-      <div className="min-h-screen w-full max-w-full overflow-x-hidden box-border bg-gray-50 flex flex-col">
-        <div className="bg-white border-b-4 border-brand-900 p-3 flex justify-between items-center shadow-md shrink-0">
+      <div className="min-h-screen w-full max-w-full overflow-x-hidden print:overflow-visible print:block print:min-h-0 box-border bg-gray-50 flex flex-col">
+        <div className="bg-white border-b-4 border-brand-900 p-3 flex justify-between items-center shadow-md shrink-0 print:hidden">
           <div className="flex items-center gap-4">
             <img src={ebLogo} alt="Eastern Busway Alliance" className="h-10 object-contain" />
             <div className="flex flex-col">
@@ -73,7 +92,8 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
           </div>
         </div>
 
-        <div className="flex-1 min-w-0 w-full max-w-full overflow-x-hidden overflow-y-auto box-border">
+        <div className="flex-1 min-w-0 w-full max-w-full overflow-x-hidden overflow-y-auto print:overflow-visible print:block print:static box-border">
+          <RouteErrorBoundary>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/new" element={<NewPermitRoute />} />
@@ -84,6 +104,7 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </RouteErrorBoundary>
         </div>
       </div>
     </>

@@ -57,7 +57,11 @@ const NewPermitRoute: React.FC = () => {
             photos: []
         };
 
-        savePermit(permit);
+        try {
+            savePermit(permit);
+        } catch (e) {
+            console.error('Failed to initialise new permit:', e);
+        }
         navigate(`/permit/${permit.id}`, { replace: true });
     }, [location.state, navigate]);
 

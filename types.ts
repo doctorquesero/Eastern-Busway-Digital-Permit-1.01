@@ -89,6 +89,8 @@ export interface CloseApproachDistances {
 }
 
 export interface Permit {
+    isDraft?: boolean;
+    env?: string;
     id: string;
     permitNumber: string;
     itwocxNumber?: string;
