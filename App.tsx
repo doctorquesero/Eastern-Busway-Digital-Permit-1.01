@@ -1,19 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
 import NewPermitRoute from './pages/NewPermitRoute';
 import PermitDetail from './pages/PermitDetail';
+import AuditPdfView from './pages/AuditPdfView';
 import NewPumpPermit from './pages/NewPumpPermit';
 import PumpPermitDetail from './pages/PumpPermitDetail';
 import { UnderConstruction } from './pages/UnderConstruction';
 import { Settings as SettingsPage } from './pages/Settings';
+import MetricsDashboard from './metrics-performance/web/MetricsDashboard';
 import { logoutCX, getUserRole, getCurrentUserEmail } from './services/cx';
 import { LoginModal } from './components/LoginModal';
 import { DemoBanner } from './components/DemoBanner';
-import { LogOut, Loader2, Settings as SettingsIcon } from 'lucide-react';
+import { LogOut, Loader2, Settings as SettingsIcon, BarChart3, ArrowLeft, KeyRound } from 'lucide-react';
 import ebLogo from './assets/eb-logo.png';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, authPersistence } from './firebase';
+import { ChangePinModal } from './components/ChangePinForm';
 
 class RouteErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
@@ -48,47 +51,80 @@ const PumpPermitDetailContainer = () => {
   return <PumpPermitDetail id={id} onBack={() => navigate('/')} />;
 };
 
-// 🚀 NÚCLEO DE NAVEGACIÓN (Para poder usar useLocation)
+// ðŸš€ NÃšCLEO DE NAVEGACIÃ“N (Para poder usar useLocation)
 const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, userEmail: string, handleLogout: () => void }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const closePinModal = useCallback(() => setIsPinModalOpen(false), []);
 
-  // 🔒 Validación estricta: Solo los Master ven el botón Settings
+  // ðŸ”’ ValidaciÃ³n estricta: Solo los Master ven el botÃ³n Settings
   const isMaster = userRole.toLowerCase().includes('master');
-  // 👁️ Verificación visual: Si ya estamos en la página de Settings, ocultar el botón
+  // ðŸ‘ï¸ VerificaciÃ³n visual: Si ya estamos en la pÃ¡gina de Settings, ocultar el botÃ³n
   const isSettingsPage = location.pathname === '/settings';
+  const isMetricsPage = location.pathname === '/metrics';
 
   return (
     <>
       <DemoBanner />
       <div className="min-h-screen w-full max-w-full overflow-x-hidden print:overflow-visible print:block print:min-h-0 box-border bg-gray-50 flex flex-col">
         <div className="bg-white border-b-4 border-brand-900 p-3 flex justify-between items-center shadow-md shrink-0 print:hidden">
-          <div className="flex items-center gap-4">
-            <img src={ebLogo} alt="Eastern Busway Alliance" className="h-10 object-contain" />
-            <div className="flex flex-col">
-              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest leading-tight">{userEmail}</span>
-              <span className="text-xs font-black text-brand-700 uppercase">{userRole}</span>
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
+            <img src={ebLogo} alt="Eastern Busway Alliance" className="h-8 sm:h-10 object-contain shrink-0" />
+            <div className="flex flex-col min-w-0">
+              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest leading-tight truncate">{userEmail}</span>
+              <span className="text-xs font-black text-brand-700 uppercase truncate">{userRole}</span>
             </div>
           </div>
 
-          <div className="flex gap-2">
-            {!isSettingsPage && (
-              <button
-                onClick={() => navigate('/settings')}
-                className="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-xl text-xs font-black uppercase text-white hover:bg-gray-900 transition-colors shadow-md"
-              >
-                <SettingsIcon size={16} />
-                <span className="hidden sm:inline">Settings</span>
-              </button>
-            )}
-
+          <div className="flex gap-1.5 sm:gap-2 shrink-0 ml-2">
             <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 bg-red-600 px-4 py-2 rounded-xl text-xs font-black uppercase text-white hover:bg-red-700 transition-colors shadow-md"
+              onClick={() => setIsPinModalOpen(true)}
+              aria-label="Change PIN"
+              className="flex items-center justify-center gap-1 bg-blue-700 px-2 py-2 sm:px-4 rounded-xl text-[10px] sm:text-xs font-black uppercase text-white hover:bg-blue-800 transition-colors shadow-md shrink-0"
             >
-              <LogOut size={16} />
-              <span className="hidden sm:inline">Log Out</span>
+              <KeyRound size={16} />
+              <span>Change PIN</span>
             </button>
+            {isMetricsPage ? (
+              <button
+                onClick={() => navigate('/')}
+                aria-label="Back to Dashboard"
+                className="flex items-center justify-center gap-2 bg-gray-800 p-2.5 sm:px-4 sm:py-2 rounded-xl text-xs font-black uppercase text-white hover:bg-gray-900 transition-colors shadow-md shrink-0"
+              >
+                <ArrowLeft size={16} />
+                <span className="hidden sm:inline">Back to Dashboard</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => navigate('/metrics')}
+                  aria-label="Metrics and Analytics"
+                  className="flex items-center justify-center gap-2 bg-gray-800 p-2.5 sm:px-4 sm:py-2 rounded-xl text-xs font-black uppercase text-white hover:bg-gray-900 transition-colors shadow-md shrink-0"
+                >
+                  <BarChart3 size={16} />
+                  <span className="hidden sm:inline">Metrics &amp; Analytics</span>
+                </button>
+                {!isSettingsPage && (
+                  <button
+                    onClick={() => navigate('/settings')}
+                    aria-label="Settings"
+                    className="flex items-center justify-center gap-2 bg-gray-800 p-2.5 sm:px-4 sm:py-2 rounded-xl text-xs font-black uppercase text-white hover:bg-gray-900 transition-colors shadow-md shrink-0"
+                  >
+                    <SettingsIcon size={16} />
+                    <span className="hidden sm:inline">Settings</span>
+                  </button>
+                )}
+                <button
+                  onClick={handleLogout}
+                  aria-label="Log Out"
+                  className="flex items-center justify-center gap-2 bg-red-600 p-2.5 sm:px-4 sm:py-2 rounded-xl text-xs font-black uppercase text-white hover:bg-red-700 transition-colors shadow-md shrink-0"
+                >
+                  <LogOut size={16} />
+                  <span className="hidden sm:inline">Log Out</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -102,11 +138,13 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
             <Route path="/pump-permit/:id" element={<PumpPermitDetailContainer />} />
             <Route path="/under-construction" element={<UnderConstruction />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/metrics" element={<MetricsDashboard />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           </RouteErrorBoundary>
         </div>
       </div>
+      {isPinModalOpen && <ChangePinModal currentEmail={auth.currentUser?.email || userEmail} onClose={closePinModal} />}
     </>
   );
 };
@@ -197,4 +235,22 @@ const App: React.FC = () => {
   );
 };
 
-export default App;
+// Public allow-list: /audit-pdf/:permitId is served before the login gate (no sign-in required).
+const AppRoot: React.FC = () => {
+  const [isAudit, setIsAudit] = useState(window.location.hash.startsWith('#/audit-pdf/'));
+  useEffect(() => {
+    const onHash = () => setIsAudit(window.location.hash.startsWith('#/audit-pdf/'));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  if (!isAudit) return <App />;
+  return (
+    <HashRouter>
+      <Routes>
+        <Route path="/audit-pdf/:permitId" element={<AuditPdfView />} />
+      </Routes>
+    </HashRouter>
+  );
+};
+
+export default AppRoot;

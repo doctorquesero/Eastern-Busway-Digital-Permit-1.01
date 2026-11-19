@@ -169,7 +169,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
         }
 
         const rawNum = formData.itwocxNumber?.replace(/\D/g, "") || "";
-        if (getPermits().some(p => (p.itwocxNumber || "").replace(/\D/g, "") === rawNum && p.id !== formData.id)) {
+        if (getPermits().some(p => String(p.itwocxNumber || "").replace(/\D/g, "") === rawNum && p.id !== formData.id)) {
             alert(`âš ï¸ STOP: Permit PF#${rawNum} already exists in the system!`); return;
         }
 

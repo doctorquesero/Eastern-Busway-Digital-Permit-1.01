@@ -2,6 +2,7 @@ import React from 'react';
 import { Permit, ChecklistItem, Signature, HandoverLog } from '../types';
 import { Phone } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { formatDateTime } from '../utils/dateUtils';
 
 export interface PermitPDFLayoutProps {
     permit: Permit;
@@ -14,6 +15,7 @@ export interface PermitPDFLayoutProps {
     handoverItems?: ChecklistItem[];
     currentHandovers: HandoverLog[];
     CEASE_WORKS_ITEMS: { id: string; text: string }[];
+    auditUrl?: string;
 }
 
 // Legacy records may hold {text, timestamp, author} objects where a string is expected
@@ -31,6 +33,10 @@ const txt = (value: unknown): string => {
 };
 
 const PHOTOS_PER_PAGE = 6;
+
+const LogSignature: React.FC<{ sig?: Signature | null }> = ({ sig }) => sig ? (
+    <div><div>{sig.name}</div>{sig.type === 'draw' && sig.data && <img src={sig.data} className="h-6 mx-auto object-contain" alt="Signature" />}</div>
+) : null;
 
 const Page: React.FC<{ children: React.ReactNode, pageNum: number | string }> = ({ children, pageNum }) => (
     <div className="pdf-page bg-white box-border mx-auto relative flex flex-col"
@@ -68,7 +74,7 @@ const EBASignature: React.FC<{ title: string; sig?: Signature | null; date?: str
         <div className="p-1 w-1/4 flex items-center justify-center border-r border-black bg-gray-50 uppercase text-center leading-tight">{sig?.name || 'N/A'}</div>
         <div className="bg-blue-700 text-white p-2 flex items-center justify-center w-1/6 text-center uppercase">{initialTitle}</div>
         <div className="p-0.5 w-1/4 flex items-center justify-center border-r border-black">
-            {sig?.data && <img src={sig.data} className="h-8 object-contain mix-blend-multiply" alt="sig" />}
+            {sig?.data && (sig.type === 'type' ? <span className="italic">{sig.name}</span> : <img src={sig.data} className="h-8 object-contain mix-blend-multiply" alt="sig" />)}
         </div>
         <div className="bg-blue-700 text-white p-2 flex items-center justify-center w-1/12 text-center uppercase">Date</div>
         <div className="p-1 w-1/6 flex items-center justify-center font-mono text-[9px] text-center">{date || (sig?.date ? new Date(sig.date).toLocaleDateString() : 'N/A')}</div>
@@ -122,7 +128,7 @@ export const EmergencyProtocolContent: React.FC<{ isPdf?: boolean }> = ({ isPdf 
     </div>
 );
 
-const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, currentReceiverSignature, partAItems, partBItems, receiverItems, handoverItems, currentHandovers, CEASE_WORKS_ITEMS }) => {
+const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, currentReceiverSignature, partAItems, partBItems, receiverItems, handoverItems, currentHandovers, CEASE_WORKS_ITEMS, auditUrl }) => {
 
     const safePermit = {
         ...permit,
@@ -170,7 +176,16 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                     @page { size: A4; margin: 0 !important; }
                     body { margin: 0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                 }
-                `}
+                    /* Ink-saver: white backgrounds, dark text, borders for structure. Photos (img) are untouched and stay in full color. */
+                    .pdf-page [class*="bg-blue"], .pdf-page [class*="bg-gray"], .pdf-page [class*="bg-green"], .pdf-page [class*="bg-red"], .pdf-page [class*="bg-yellow"] {
+                        background-color: #ffffff !important;
+                        color: #000000 !important;
+                    }
+                    .pdf-page thead, .pdf-page thead th, .pdf-page thead td { background-color: #ffffff !important; color: #000000 !important; border-bottom: 2px solid #000000; }
+                    .pdf-page [class*="bg-blue"], .pdf-page [class*="bg-gray-100"] { border-bottom: 2px solid #000000; }
+                    .pdf-page .text-white, .pdf-page [class*="text-blue"], .pdf-page [class*="text-gray-7"], .pdf-page [class*="text-gray-6"] { color: #000000 !important; }
+                    .pdf-page .border-blue-100 { border-color: #000000 !important; }
+                    `}
             </style>
 
             {/* === PAGE 1 === */}
@@ -197,6 +212,15 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         <p className="text-xs mt-4 italic text-gray-600">This digital record replaces the printed CX Form. The form must be printed using a scale of 70% if hardcopy is required. No resolution is lost.</p>
                     </div>
                 </div>
+                {auditUrl && (
+                    <div className="flex justify-end pt-4">
+                        <div className="flex flex-col items-center border-2 border-black p-2">
+                            <QRCodeSVG value={auditUrl} size={90} level="M" />
+                            <p className="text-[10px] font-black uppercase tracking-wide mt-1">For Audit Only</p>
+                            <p className="text-[8px] text-gray-600">Read-only · valid 24h</p>
+                        </div>
+                    </div>
+                )}
             </Page>
 
             {/* === PAGE 2 === */}
@@ -412,6 +436,13 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                     </div>
                 )}
 
+                {safePermit.approverPhoto && (
+                    <div className="mb-2 text-center">
+                        <img src={safePermit.approverPhoto} alt="Approver site inspection" className="h-28 w-auto mx-auto border border-black object-cover" />
+                        <p className="text-[8px] font-bold text-red-700 border border-red-600 bg-red-50 p-1 mt-1 text-left">⚠️ LEGAL LIABILITY NOTICE: By submitting this photograph and signing Part B, the Approver legally certifies an on-site visual inspection of the exposed underground services and assumes full personal, disciplinary, and legal liability under the Health and Safety at Work Act; uploading desk, unrelated, or falsified images constitutes falsification of an official safety record and will result in immediate compliance escalation.</p>
+                    </div>
+                )}
+
                 <EBASignature title="Permit Approver" sig={permit.approverSignature} />
             </Page>
 
@@ -561,17 +592,17 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                 <table className="w-full text-[10px] border-collapse border border-black mb-8">
                     <tbody>
                         <tr className="bg-blue-600 text-white font-bold"><td colSpan={6} className="p-1 border border-black">Daily sign off: confirmation all the above requirements have been completed and understood</td></tr>
-                        <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black w-40">Date</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-1 text-center font-mono">{permit.dailyLogs?.[i]?.date || ''}</td>)}
+                        <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black w-40">Date &amp; Time</td>
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-1 text-center font-mono">{formatDateTime(permit.dailyLogs?.[i]?.date)}</td>)}
                         </tr>
                         <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black">Reviewed by Permit Receiver</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit?.dailyLogs?.[i]?.receiverSig?.data && <img src={permit?.dailyLogs?.[i]?.receiverSig?.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8"><LogSignature sig={permit.dailyLogs?.[i]?.receiverSig} /></td>)}
                         </tr>
                         <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black">Signed by excavator operator</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit?.dailyLogs?.[i]?.excavatorSig?.data && <img src={permit?.dailyLogs?.[i]?.excavatorSig?.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8"><LogSignature sig={permit.dailyLogs?.[i]?.excavatorSig} /></td>)}
                         </tr>
                         <tr><td className="bg-blue-600 text-white font-bold p-1 border border-black">Signed by spotter</td>
-                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8">{permit?.dailyLogs?.[i]?.spotterSig?.data && <img src={permit?.dailyLogs?.[i]?.spotterSig?.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>)}
+                            {[0, 1, 2, 3, 4].map(i => <td key={i} className="border border-black p-0 text-center h-8"><LogSignature sig={permit.dailyLogs?.[i]?.spotterSig} /></td>)}
                         </tr>
                     </tbody>
                 </table>
@@ -589,8 +620,8 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
 
                 <table className="w-full text-[10px] border-collapse border border-black">
                     <thead className="bg-gray-100 text-left">
-                        <tr><th className="border border-black p-1 w-1/4">Name</th><th className="border border-black p-1 w-1/6">Date</th><th className="border border-black p-1 w-1/4">Signature</th>
-                            <th className="border border-black p-1 w-1/4">Name</th><th className="border border-black p-1 w-1/6">Date</th><th className="border border-black p-1 w-1/4">Signature</th></tr>
+                        <tr><th className="border border-black p-1 w-1/4">Name</th><th className="border border-black p-1 w-1/6">Date &amp; Time</th><th className="border border-black p-1 w-1/4">Signature</th>
+                            <th className="border border-black p-1 w-1/4">Name</th><th className="border border-black p-1 w-1/6">Date &amp; Time</th><th className="border border-black p-1 w-1/4">Signature</th></tr>
                     </thead>
                     <tbody>
                         {[0, 2, 4, 6, 8, 10, 12, 14].map(idx => {
@@ -598,14 +629,38 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                             const m2 = permit.crewMembers?.[idx + 1];
                             return (
                                 <tr key={idx} className="h-8">
-                                    <td className="border border-black p-1 uppercase font-bold text-[9px]">{m1?.name || ''}</td><td className="border border-black p-1 font-mono text-[8px]">{m1?.dateInducted ? new Date(m1.dateInducted).toLocaleDateString() : ''}</td><td className="border border-black p-0 text-center">{m1?.signature?.data && <img src={m1.signature.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>
-                                    <td className="border border-black p-1 uppercase font-bold text-[9px]">{m2?.name || ''}</td><td className="border border-black p-1 font-mono text-[8px]">{m2?.dateInducted ? new Date(m2.dateInducted).toLocaleDateString() : ''}</td><td className="border border-black p-0 text-center">{m2?.signature?.data && <img src={m2.signature.data} className="h-6 mx-auto mix-blend-multiply" alt="sig" />}</td>
+                                    <td className="border border-black p-1 uppercase font-bold text-[9px]">{m1?.name || ''}</td><td className="border border-black p-1 font-mono text-[8px]">{formatDateTime(m1?.dateInducted)}</td><td className="border border-black p-0 text-center"><LogSignature sig={m1?.signature} /></td>
+                                    <td className="border border-black p-1 uppercase font-bold text-[9px]">{m2?.name || ''}</td><td className="border border-black p-1 font-mono text-[8px]">{formatDateTime(m2?.dateInducted)}</td><td className="border border-black p-0 text-center"><LogSignature sig={m2?.signature} /></td>
                                 </tr>
                             )
                         })}
                     </tbody>
                 </table>
             </Page>
+
+            {Array.from({ length: Math.ceil(Math.max(0, (permit.dailyLogs?.length || 0) - 5) / 8) }, (_, page) => (
+                <Page key={`daily-extra-${page}`} pageNum={`10 daily continuation ${page + 1}`}>
+                    <h3 className="font-bold mb-4">Daily Sign On (continued)</h3>
+                    <table className="w-full text-[10px] border-collapse border border-black">
+                        <thead><tr>{['Date & Time', 'Receiver', 'Operator', 'Spotter'].map(title => <th key={title} className="border border-black p-2">{title}</th>)}</tr></thead>
+                        <tbody>{permit.dailyLogs.slice(5 + page * 8, 13 + page * 8).map(log => <tr key={log.id}>
+                            <td className="border border-black p-2">{formatDateTime(log.date)}</td>
+                            {[log.receiverSig, log.excavatorSig, log.spotterSig].map((sig, index) => <td key={index} className="border border-black p-2 text-center"><LogSignature sig={sig} /></td>)}
+                        </tr>)}</tbody>
+                    </table>
+                </Page>
+            ))}
+            {Array.from({ length: Math.ceil(Math.max(0, (permit.crewMembers?.length || 0) - 16) / 16) }, (_, page) => (
+                <Page key={`crew-extra-${page}`} pageNum={`10 crew continuation ${page + 1}`}>
+                    <h3 className="font-bold mb-4">Crew Registration (continued)</h3>
+                    <table className="w-full text-[10px] border-collapse border border-black">
+                        <thead><tr>{['Name', 'Date & Time', 'Signature'].map(title => <th key={title} className="border border-black p-2">{title}</th>)}</tr></thead>
+                        <tbody>{permit.crewMembers.slice(16 + page * 16, 32 + page * 16).map(member => <tr key={member.id}>
+                            <td className="border border-black p-1">{member.name}</td><td className="border border-black p-1">{formatDateTime(member.dateInducted)}</td><td className="border border-black p-1 text-center"><LogSignature sig={member.signature} /></td>
+                        </tr>)}</tbody>
+                    </table>
+                </Page>
+            ))}
 
             {/* === PAGE 11 === */}
             <Page pageNum={11}>
@@ -658,11 +713,11 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                     <div className="flex flex-col gap-8 h-full">
                         {permit.dailySignOffUrl && (
                             <div className="border-2 border-black p-2 text-center rounded bg-gray-50 flex-1 flex flex-col">
-                                <p className="font-black text-[12px] uppercase bg-white p-2 border border-black mb-2 shrink-0">Daily Sign Off Photo</p>
+                                <p className="font-black text-[12px] uppercase bg-white p-2 border border-black mb-2 shrink-0">{permit.dailySignOffUrl === permit.crewRegistrationUrl ? 'Daily Sign Off & Crew Registration Photo' : 'Daily Sign Off Photo'}</p>
                                 <img crossOrigin="anonymous" src={permit.dailySignOffUrl} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '300px' }} alt="Daily Sign Off" />
                             </div>
                         )}
-                        {permit.crewRegistrationUrl && (
+                        {permit.crewRegistrationUrl && permit.crewRegistrationUrl !== permit.dailySignOffUrl && (
                             <div className="border-2 border-black p-2 text-center rounded bg-gray-50 flex-1 flex flex-col">
                                 <p className="font-black text-[12px] uppercase bg-white p-2 border border-black mb-2 shrink-0">Crew Registration Photo</p>
                                 <img crossOrigin="anonymous" src={permit.crewRegistrationUrl} className="w-full object-contain mb-2 flex-grow" style={{ maxHeight: '300px' }} alt="Crew Registration" />

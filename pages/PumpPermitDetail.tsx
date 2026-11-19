@@ -16,7 +16,7 @@ import { jsPDF } from 'jspdf';
 import { getTargetCollection } from '../utils/appMode';
 import { sanitizeForFirestore } from '../utils/firestore';
 import { generateId } from '../utils/id';
-import { compressImageToJpeg } from '../utils/image';
+import { compressImageToJpeg, compressPermitImagesForPdf } from '../utils/image';
 
 interface PumpPermitDetailProps {
     id: string;
@@ -27,6 +27,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     const [permit, setPermit] = useState<Permit | null>(null);
     const [loading, setLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [closureStage, setClosureStage] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
@@ -190,6 +191,8 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
     };
 
     const generateAndUploadPDF = async (permitData: Permit) => {
+        const pdfSafePermit = await compressPermitImagesForPdf(permitData);
+        setClosureStage('2/3: Generating PDF...');
         const pdfContainer = document.createElement('div');
         pdfContainer.style.position = 'absolute';
         pdfContainer.style.left = '-9999px';
@@ -199,12 +202,12 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         const root = ReactDOM.createRoot(pdfContainer);
 
         return new Promise<void>((resolve, reject) => {
-            root.render(<PumpPermitPDFLayout permit={permitData} />);
+            root.render(<PumpPermitPDFLayout permit={pdfSafePermit} />);
 
             setTimeout(async () => {
                 try {
-                    const canvas = await html2canvas(pdfContainer, { scale: 2, useCORS: true, logging: false });
-                    const imgData = canvas.toDataURL('image/jpeg', 0.8);
+                    const canvas = await html2canvas(pdfContainer, { scale: 1.25, useCORS: true, logging: false });
+                    const imgData = canvas.toDataURL('image/jpeg', 0.6);
                     const pdf = new jsPDF('p', 'mm', 'a4');
                     const pdfWidth = pdf.internal.pageSize.getWidth();
                     const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
@@ -226,6 +229,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                     const pdfBase64 = pdf.output('datauristring').split(',')[1];
 
                     let finalUpdatedPermit = { ...permitData, syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'closure', cxSyncError: null } as any;
+                    setClosureStage('3/3: Syncing to CX...');
 
                     try {
                         const storage = getStorage();
@@ -260,6 +264,9 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
         }
 
         setIsSaving(true);
+        setClosureStage('1/3: Compressing Photos...');
+        // Yield so iOS Safari can paint the processing state before the heavy work locks the main thread.
+        await new Promise(resolve => setTimeout(resolve, 300));
         const updatedPermit: Permit = {
             ...permit,
             status: 'closed',
@@ -281,10 +288,9 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
             alert(`âš ï¸ Error saving permit: ${error.message}`);
         } finally {
             setIsSaving(false);
+            setClosureStage('');
         }
-    };
-
-    if (loading) return <div className="flex justify-center items-center h-64"><Loader2 className="animate-spin text-blue-600" size={48} /></div>;
+    }; return <div className="flex justify-center items-center h-64"><Loader2 className="animate-spin text-blue-600" size={48} /></div>;
     if (!permit) return <div className="text-center p-12 text-red-600 font-bold">Permit not found.</div>;
 
     const currentStatus = permit?.status?.toUpperCase() || '';
@@ -629,6 +635,9 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                         />
                                     </div>
 
+                                    {isSaving && closureStage && (
+                                        <div className="mt-4 flex items-center gap-2 font-black text-blue-700 text-sm uppercase"><Loader2 className="animate-spin" size={18} /> {closureStage}</div>
+                                    )}
                                     <SignaturePad
                                         label="Sign here to close permit *"
                                         onSave={(sig) => {

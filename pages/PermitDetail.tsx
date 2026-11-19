@@ -1,33 +1,42 @@
 ﻿// ARCHIVO: src/pages/PermitDetail.tsx
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { DebouncedInput, DebouncedTextArea, SyncedSelect, SyncedDateInput, flushPendingFields } from '../components/DebouncedFields';
-import { addDaysISO } from '../utils/dateUtils';
-import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff, Wifi } from 'lucide-react';
-import { Permit, Signature, HandoverLog, DailySignOff, PermitPhoto, CeaseWorksRecord, CrewMember, INITIAL_PART_A, INITIAL_PART_B, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST } from '../types';
+import { flushSync } from 'react-dom';
+import { DebouncedInput, DebouncedTextArea, SyncedSelect, flushPendingFields } from '../components/DebouncedFields';
+import { addDaysISO, formatDateTime } from '../utils/dateUtils';
+import { ArrowLeft, Printer, Users, Briefcase, Lock, ImageIcon, CloudUpload, Loader2, Camera, AlertTriangle, ShieldCheck, Info, CheckCircle, FileSignature, CloudOff, Wifi, Trash2 } from 'lucide-react';
+import { Permit, PermitNote, Signature, HandoverLog, DailySignOff, PermitPhoto, CeaseWorksRecord, CrewMember, INITIAL_PART_A, INITIAL_PART_B, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST } from '../types';
 import { getPermitById, savePermit } from '../services/storage';
 import { getUserRole } from '../services/cx';
 import SignaturePad from '../components/SignaturePad';
+import AclSignature from '../components/AclSignature';
+import { AclUser } from '../utils/acl';
+import { getActiveReceiver, activeReceiverKey, isCurrentUserActiveReceiver } from '../utils/receiverOwnership';
+import { hasLockedPreworkChanges, isPreworkLocked } from '../utils/permitLock';
 import PermitPDFLayout, { EmergencyProtocolContent } from '../components/PermitPDFLayout';
 import jsPDF from 'jspdf';
 import { uploadImageToStorage } from '../firebase';
-import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, onSnapshot, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
 import { sanitizeForFirestore } from '../utils/firestore';
 import { getDisplayNameFromEmail } from '../utils/userNames';
 import { generateId } from '../utils/id';
-import { compressImageToJpeg } from '../utils/image';
+import { compressImageToJpeg, compressPermitImagesForPdf } from '../utils/image';
 import { renderPagesToPdf, loadImageAsCompressedJpeg } from '../utils/pdf';
 import { getTargetCollection } from '../utils/appMode';
+import { buildAuditPdfUrl } from '../utils/auditUrl';
 
 interface PermitDetailProps { id: string; onBack: () => void; }
+
+type ReceiverAclUser = AclUser;
 
 const appendClosureEvidencePagesToPdf = async (pdf: jsPDF, permit: Permit) => {
     const evidence = [
         { title: 'Daily Sign Off Photo', url: permit.dailySignOffUrl },
         { title: 'Crew Registration Photo', url: permit.crewRegistrationUrl }
-    ];
+    ].filter((item, i, arr) => !(i === 1 && item.url && item.url === arr[0].url));
+    if (evidence[0]?.url && evidence[0].url === permit.crewRegistrationUrl) evidence[0].title = 'Daily Sign Off & Crew Registration Photo';
 
     for (const item of evidence) {
         if (!item.url) continue;
@@ -59,14 +68,56 @@ const appendClosureEvidencePagesToPdf = async (pdf: jsPDF, permit: Permit) => {
     }
 };
 
+interface PrintPermitButtonProps {
+  className?: string;
+  // Optional synchronous hook run before printing; return false to cancel
+  onBeforePrint?: () => boolean | void;
+}
+
+export const PrintPermitButton: React.FC<PrintPermitButtonProps> = ({ className, onBeforePrint }) => {
+  const handlePrint = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+
+    // 1. Remove focus to prevent iOS keyboard/UI interference
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
+    if (onBeforePrint && onBeforePrint() === false) return;
+
+    // 2. Synchronous execution with Safari-specific fallback
+    try {
+      // iOS Safari often requires execCommand to trigger the native print spooler synchronously
+      const passed = document.execCommand('print', false, undefined);
+      if (!passed) {
+        window.print();
+      }
+    } catch (err) {
+      window.print();
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handlePrint}
+      className={`print:hidden flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-md shadow-sm transition-colors active:scale-95 ${className || ''}`}
+    >
+      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+      </svg>
+      PRINT PERMIT
+    </button>
+  );
+};
+
 const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [permit, setPermit] = useState<Permit | undefined>(getPermitById(id));
-    const [isLoading, setIsLoading] = useState(!getPermitById(id)); // Loading state for Firebase fetch
+    const [isLoading, setIsLoading] = useState(!getPermitById(id)); // Loading state for Firebase fetch
 
     const [activeTab, setActiveTab] = useState<'engineer' | 'receiver_checklist' | 'issuer' | 'approver' | 'crew' | 'daily' | 'handover' | 'photos' | 'notes' | 'closure'>('engineer');
 
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [requiredFieldErrors, setRequiredFieldErrors] = useState<Record<string, boolean>>({});
     const [duplicatePermitError, setDuplicatePermitError] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
     const [isUploadingApproverPhoto, setIsUploadingApproverPhoto] = useState(false);
@@ -85,27 +136,40 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const sessionRole = String(getUserRole() || '').toLowerCase();
     const currentUser = getAuth().currentUser as any;
-    const userRoles = Array.isArray(currentUser?.roles) ? currentUser.roles : [];
-    const isMaster = currentUser?.roles?.includes('Master') || userRoles.some((r: string) => typeof r === 'string' && r.toLowerCase() === 'master') || currentUser?.isMaster === true || sessionRole.includes('master');
-    const isApprover = sessionRole.includes('approver') || isMaster;
-    const isReceiver = (sessionRole.includes('receiver') && !sessionRole.includes('issuer')) || isMaster;
+    const userEmail = (currentUser?.email || '').toLowerCase().trim();
+    const isMaster = userEmail === 'dietrich.truchsess@easternbusway.nz';
     const isIssuerRole = sessionRole.includes('issuer') || isMaster;
 
-    const userEmail = (currentUser?.email || '').toLowerCase().trim();
-    const userName = (currentUser?.displayName || currentUser?.name || getDisplayNameFromEmail(currentUser?.email)).toLowerCase().trim();
     const currentUserDisplayName = currentUser?.displayName || currentUser?.name || getDisplayNameFromEmail(currentUser?.email) || currentUser?.email || 'Unknown user';
-    const userUid = currentUser?.uid || currentUser?.id || '';
-
-    const permitReceiverEmail = String(permit?.receiverEmail || permit?.receiver || '').toLowerCase().trim();
-    const permitReceiverName = String(permit?.receiverName || permit?.receiverSignature?.name || getDisplayNameFromEmail(permitReceiverEmail)).toLowerCase().trim();
-    const permitReceiverId = permit?.receiverId || permit?.receiverUid || '';
+    const [aclUsers, setAclUsers] = useState<ReceiverAclUser[]>([]);
+    const [aclError, setAclError] = useState('');
+    useEffect(() => {
+        return onSnapshot(doc(db, 'appSettings', 'global'), snapshot => {
+                const assignments = snapshot.data()?.roleAssignments;
+                if (!snapshot.exists() || !Array.isArray(assignments)) {
+                    setAclUsers([]);
+                    setAclError('Unable to verify Receiver access. Reload the page and try again.');
+                    return;
+                }
+                setAclUsers(assignments);
+                setAclError('');
+            }, error => {
+                console.error('Failed to load receiver directory:', error);
+                setAclUsers([]);
+                setAclError('Unable to verify Receiver access. Reload the page and try again.');
+            });
+    }, []);
     // Local state for the five fields that need smooth typing
     const [location, setLocation] = useState(permit?.location || '');
     const [issuedDate, setIssuedDate] = useState(permit?.issuedDate || '');
     const [commencementDate, setCommencementDate] = useState(permit?.commencementDate || '');
     const [endDate, setEndDate] = useState(permit?.endDate || '');
     const [scopeOfWorks, setScopeOfWorks] = useState(permit?.scopeOfWorks || '');
-    const [itwocxNumber, setItwocxNumber] = useState(permit?.itwocxNumber || '');
+    const toPermitNumber = (value: unknown): number | null => {
+        const parsed = parseInt(String(value ?? '').replace(/\D/g, ''), 10);
+        return Number.isNaN(parsed) ? null : parsed;
+    };
+    const [itwocxNumber, setItwocxNumber] = useState<number | null>(toPermitNumber(permit?.itwocxNumber));
     const [excavationType, setExcavationType] = useState<string>(permit?.excavationType || '');
     // Sync local state with permit when it changes
     useEffect(() => {
@@ -115,24 +179,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             setCommencementDate(permit.commencementDate || '');
             setEndDate(permit.endDate || '');
             setScopeOfWorks(permit.scopeOfWorks || '');
-            setItwocxNumber(permit.itwocxNumber || '');
+            setItwocxNumber(toPermitNumber(permit.itwocxNumber));
             setExcavationType(permit.excavationType || '');
         }
     }, [permit?.id]);
-    const isDesignatedReceiver =
-        (userEmail && permitReceiverEmail && userEmail === permitReceiverEmail) ||
-        (userName && permitReceiverName && userName === permitReceiverName) ||
-        (userEmail && permitReceiverName && userEmail.includes(permitReceiverName.replace(/\s+/g, ''))) ||
-        (userUid && permitReceiverId && userUid === permitReceiverId);
-
-    const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
     const [dailyRecSig, setDailyRecSig] = useState<Signature | null>(null);
     const [dailyOpSig, setDailyOpSig] = useState<Signature | null>(null);
     const [dailySpotSig, setDailySpotSig] = useState<Signature | null>(null);
-    const [newCrewDate, setNewCrewDate] = useState(new Date().toISOString().split('T')[0]);
     const [newCrewName, setNewCrewName] = useState('');
     const [newCrewRole, setNewCrewRole] = useState('Labour');
-    const [handoverReceiver, setHandoverReceiver] = useState('');
     const [handoverSignature, setHandoverSignature] = useState<Signature | null>(null);
     const [handoverChecks, setHandoverChecks] = useState<Record<string, boolean>>({});
     const [closureReceiverName, setClosureReceiverName] = useState('');
@@ -142,6 +197,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [outstandingWorks, setOutstandingWorks] = useState(permit?.closureOutstandingWorksDetails || '');
     const [photoCaption, setPhotoCaption] = useState('');
     const [otherNotes, setOtherNotes] = useState(permit?.otherNotes || '');
+    const [noteDraft, setNoteDraft] = useState('');
+    const [isSavingNote, setIsSavingNote] = useState(false);
     // Fetch permit from Firebase if not available in local cache
     useEffect(() => {
         if (!permit) {
@@ -180,14 +237,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const approverGalleryRef = useRef<HTMLInputElement>(null);
     const dailySignOffUploadRef = useRef<HTMLInputElement>(null);
     const dailySignOffGalleryRef = useRef<HTMLInputElement>(null);
-    const crewRegistrationUploadRef = useRef<HTMLInputElement>(null);
-    const crewRegistrationGalleryRef = useRef<HTMLInputElement>(null);
     const pdfExportRef = useRef<HTMLDivElement>(null);
     // Always holds the newest permit (updated synchronously on every sync) so back-to-back flushes never overwrite each other with a stale closure copy
     const permitRef = useRef<Permit | undefined>(permit);
     // The heavy hidden PDF layout is only mounted on demand (iOS Safari memory limits)
     // Used ONLY by the iTwoCX closure/PDF-backup paths; the local print button has its own container below.
     const [isPreparingPDF, setIsPreparingPDF] = useState(false);
+    // Downscaled copy of the permit used only to render the PDF; never written to Firestore.
+    const [pdfPermit, setPdfPermit] = useState<Permit | null>(null);
+    const [closureStage, setClosureStage] = useState<1 | 2 | 3 | null>(null);
     const mountPDFLayout = async () => {
         setIsPreparingPDF(true);
         for (let i = 0; i < 50 && !pdfExportRef.current; i++) await new Promise(r => setTimeout(r, 100));
@@ -198,40 +256,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     // Local print only: native window.print() of a print-only block in normal flow (separate ref/state, never touches the Cx PDF pipeline)
     const printLayoutRef = useRef<HTMLDivElement>(null);
     const [isPrintMounted, setIsPrintMounted] = useState(false);
-    const [isPrinting, setIsPrinting] = useState(false);
-    // Resolves once every <img> inside the node has loaded (or failed), capped so a broken image can't hang printing
-    const waitForImages = async (node: HTMLElement | null, timeoutMs = 10000) => {
-        if (!node) return;
-        const waitOne = (img: HTMLImageElement) => new Promise<void>(resolve => {
-            const done = () => { img.removeEventListener('load', done); img.removeEventListener('error', done); resolve(); };
-            if (img.complete) { resolve(); return; }
-            img.addEventListener('load', done);
-            img.addEventListener('error', done);
-        });
-        const imgs: HTMLImageElement[] = Array.from(node.querySelectorAll<HTMLImageElement>('img'));
-        await Promise.race([
-            Promise.all(imgs.map(img => waitOne(img).then(() => (img.decode ? img.decode().catch(() => undefined) : undefined)))),
-            new Promise(r => setTimeout(r, timeoutMs))
-        ]);
-    };
-    // Mounts the print-only permit block (in normal flow, shown only by print: CSS), waits for paint and images, then calls native window.print()
+    // Pre-mount the print block shortly after load so its images are ready, and window.print() can be fired right inside the tap (iOS blocks print() after long async waits)
     useEffect(() => {
-        if (!isPrinting) return;
-        let cancelled = false;
-        (async () => {
-            try {
-                for (let i = 0; i < 50 && !printLayoutRef.current; i++) await new Promise(r => setTimeout(r, 100));
-                await Promise.all([new Promise(r => setTimeout(r, 800)), waitForImages(printLayoutRef.current)]);
-                if (cancelled) return;
-                window.print();
-            } catch (error) {
-                logDebugError('Print failed', error);
-            } finally {
-                if (!cancelled) setIsPrinting(false);
-            }
-        })();
-        return () => { cancelled = true; };
-    }, [isPrinting]);
+        const t = setTimeout(() => setIsPrintMounted(true), 1500);
+        return () => clearTimeout(t);
+    }, []);
 
     // Debug console: only rendered when the URL contains ?debug=true
     const debugEnabled = typeof window !== 'undefined' && window.location.search.includes('debug=true');
@@ -254,11 +283,14 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     }, []);
 
     // Hooks must run before any early return so the hook count is identical on every render
-    const lastHandoverName = permit?.handoverLogs?.[permit.handoverLogs.length - 1]?.receiverName;
-    const safeReceiverName = String((permit?.handoverLogs?.length ? lastHandoverName : permit?.receiverSignature?.name) || 'Unknown');
+    const activeReceiver = getActiveReceiver(permit);
+    const lastHandoverLog = activeReceiver.handover;
+    const activeReceiverName = String(activeReceiver.names.find(name => String(name || '').trim()) || getDisplayNameFromEmail(activeReceiver.email) || 'Unknown');
+    const activeReceiverEmail = activeReceiver.email;
+    // Keep the "Identify to Close" field in sync with the active receiver, including after a handover
     useEffect(() => {
-        if (!closureReceiverName && safeReceiverName !== 'Unknown') setClosureReceiverName(safeReceiverName);
-    }, [safeReceiverName]);
+        if (activeReceiverName !== 'Unknown') setClosureReceiverName(activeReceiverName.toUpperCase());
+    }, [activeReceiverName]);
 
     if (!permit) {
         if (isLoading) return <div className="p-12 text-center text-gray-600 font-black flex items-center justify-center gap-3"><Loader2 className="animate-spin" /> Loading Permit...</div>;
@@ -274,17 +306,27 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const isClosed = permit?.status?.toLowerCase() === 'closed';
     // Si isDraft es true, isIssued SIEMPRE será falso.
     const isIssued = permit?.isDraft === false && !isClosed;
+    const isIssuedPermit = isIssued || (permit.isDraft !== true && ['active', 'issued'].includes(String(permit.status || '').toLowerCase()));
+    const isPartAReadOnly = isPreworkLocked(permit);
     const isSuspended = permit.ceaseWorksRecord?.actionTaken === 'suspended';
     const isHydro = permit.excavationType === 'hydro' || permit.excavationType === 'hand';
     const hasApproverSigned = !!permit.approverSignature?.data;
-    const arePermitDatesLocked = isClosed || isIssued || (permit.status === 'active' && permit.isDraft !== true);
+    const arePermitDatesLocked = isPartAReadOnly;
 
     const isExecutionBlocked = isIssued && !isHydro && !hasApproverSigned && !isClosed && !isSuspended;
 
-    const currentHandovers = permit.handoverLogs || [];
+    const currentHandovers = Array.isArray(permit.handoverLogs) ? permit.handoverLogs : [];
     const activeSlotIndex = currentHandovers.length;
-    const currentReceiverName = safeReceiverName;
-    const currentReceiverSignature = currentHandovers.length > 0 ? currentHandovers[currentHandovers.length - 1]?.signature : permit.receiverSignature;
+    const currentReceiverName = activeReceiverName;
+    // After a handover only the last receiver in the history may close the permit
+    const HANDOVER_CLOSURE_DENIED_MESSAGE = `Action Denied: Only the currently active Receiver (${activeReceiverName}) or a Master user can close this permit.`;
+    const isCurrentActiveReceiver = isCurrentUserActiveReceiver(permit, currentUser, aclUsers);
+    const isClosureDeniedByHandover = !isCurrentActiveReceiver && !isMaster;
+    // Silent auto-detection: digital logs replace the matching photo evidence
+    const hasDigitalCrew = !!permit.crewMembers && permit.crewMembers.length > 0;
+    const hasDigitalDaily = !!permit.dailyLogs && permit.dailyLogs.length > 0;
+    const isRegistrationEvidenceReady = (hasDigitalCrew || !!permit.crewRegistrationUrl) && (hasDigitalDaily || !!permit.dailySignOffUrl);
+    const currentReceiverSignature = lastHandoverLog?.signature || permit.receiverSignature;
 
     const partAItems = Array.isArray(permit.partAChecklist) && permit.partAChecklist.length > 0 ? permit.partAChecklist : INITIAL_PART_A;
     const receiverItems = Array.isArray(permit.receiverChecklist) && permit.receiverChecklist.length > 0 ? permit.receiverChecklist : INITIAL_RECEIVER_CHECKLIST;
@@ -292,27 +334,28 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const handoverItems = Array.isArray(permit.handoverChecklist) && permit.handoverChecklist.length > 0 ? permit.handoverChecklist : INITIAL_HANDOVER_CHECKLIST;
 
     const allHandoverChecksPassed = handoverItems.every(item => handoverChecks[item.id]);
-    // Mounts the print-only block and triggers native window.print() via the effect above
-    const handleSafePrint = () => {
-        if (isPrinting) return;
+    // Runs synchronously inside the tap (no timers) so iOS keeps the trusted user gesture; returning false aborts the print
+    const prepareForPrint = (): boolean => {
         if (!permit?.id || !Array.isArray(partAItems) || !Array.isArray(partBItems) || !Array.isArray(receiverItems)) {
             alert('Permit data is not fully loaded yet. Please wait a moment and try again.');
-            return;
+            return false;
         }
-        setIsPrintMounted(true);
-        setIsPrinting(true);
-    };    const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 shadow-sm";
-    const requiredInputClass = (field: string) => `${inputClass} ${requiredFieldErrors[field] ? 'border-red-600 ring-2 ring-red-200' : ''}`;
+        // Make sure the print block is in the DOM if the user taps before the pre-mount timer fires
+        flushSync(() => setIsPrintMounted(true));
+        return true;
+    };
+    const inputClass = "w-full bg-white text-gray-900 border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 shadow-sm";
+    const requiredInputClass = (missing: boolean) => `${inputClass} ${missing ? '!border-red-500 !bg-red-50/60 ring-2 ring-red-200' : ''}`;
 
     // Flushes every pending debounced field and returns the newest permit with the local input values applied
     const flushAndBuildPermit = (): Permit => {
         flushPendingFields();
         const base = (permitRef.current || permit) as Permit;
         const merged: Permit = { ...base };
-        if (!isClosed && !isIssued) {
+        if (!isPartAReadOnly) {
             merged.location = location;
             merged.scopeOfWorks = scopeOfWorks;
-            merged.itwocxNumber = itwocxNumber.trim();
+            if (itwocxNumber === null) delete merged.itwocxNumber; else merged.itwocxNumber = itwocxNumber;
             merged.excavationType = excavationType as Permit['excavationType'];
             if (!arePermitDatesLocked) {
                 merged.issuedDate = issuedDate;
@@ -337,7 +380,6 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             if (!String(field.value || '').trim()) errors[field.key] = true;
             return errors;
         }, {});
-        setRequiredFieldErrors(missingFields);
         if (Object.keys(missingFields).length > 0) {
             alert('Please fill in all required fields highlighted in red.');
             return false;
@@ -370,11 +412,37 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                 return false;
             }
             setDuplicatePermitError(false);
-            savePermit(updatedPermit);
-            setPermit(updatedPermit);
-            await setDoc(doc(db, getTargetCollection(), updatedPermit.id), sanitizeForFirestore(updatedPermit), { merge: true });
+            if (permitRef.current === updatedPermit) {
+                savePermit(updatedPermit);
+                setPermit(updatedPermit);
+            }
+            const permitDoc = doc(db, getTargetCollection(), updatedPermit.id);
+            const committed = await runTransaction(db, async transaction => {
+                const snapshot = await transaction.get(permitDoc);
+                if (!snapshot.exists()) {
+                    transaction.set(permitDoc, sanitizeForFirestore(updatedPermit));
+                    return updatedPermit;
+                }
+                const latest = snapshot.data() as Permit;
+                if (String(latest.status || '').toLowerCase() === 'closed') throw new Error('Permit is already closed.');
+                if (latest.isDraft === false && updatedPermit.isDraft !== false) throw new Error('Permit has already been issued. Reload before saving.');
+                if (hasLockedPreworkChanges(latest, updatedPermit)) throw new Error('Issued permit planning details and initial signatures are locked.');
+                const { dailyLogs, crewMembers, handoverLogs, ...fields } = updatedPermit;
+                transaction.set(permitDoc, sanitizeForFirestore(fields), { merge: true });
+                return { ...latest, ...fields } as Permit;
+            });
+            if (permitRef.current === updatedPermit) {
+                permitRef.current = committed;
+                savePermit(committed);
+                setPermit(committed);
+            }
             return true;
         } catch (e) {
+            if (permitRef.current === updatedPermit && previousPermit) {
+                permitRef.current = previousPermit;
+                savePermit(previousPermit);
+                setPermit(previousPermit);
+            }
             logDebugError('Firebase write failed', e);
             throw e;
         }
@@ -385,6 +453,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const handleSaveDraft = async () => {
         if (isSubmitting) return;
+        if (isPartAReadOnly) return;
         if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); }
         setSaveSuccess(false);
         setSaveError('');
@@ -392,7 +461,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             const candidate = flushAndBuildPermit();
             if (!validateRequiredEngineerFields(candidate)) return;
             setIsSubmitting(true);
-            const saved = await syncToFirebase({ ...candidate, isDraft: true, status: 'draft' });
+            const permitToSave: Permit = isIssuedPermit ? candidate : { ...candidate, isDraft: true, status: 'draft' };
+            const saved = await syncToFirebase(permitToSave);
             if (saved) {
                 setSaveSuccess(true);
                 setTimeout(() => setSaveSuccess(false), 4000);
@@ -407,25 +477,92 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
     const normalizeName = (value?: string) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-    const updateField = (field: keyof Permit, value: any) => {
-        if (isClosed || (arePermitDatesLocked && ['issuedDate', 'commencementDate', 'endDate'].includes(field)) || (isIssued && ['location', 'excavationType', 'scopeOfWorks', 'siteEngineerSignature', 'receiverSignature'].includes(field))) return;
-        const base = (permitRef.current || permit) as Permit;
-        const otherRoleSignature = field === 'receiverSignature' ? base.issuerSignature : field === 'issuerSignature' ? base.receiverSignature : null;
-        if (otherRoleSignature && value?.name && normalizeName(value.name) === normalizeName(otherRoleSignature.name)) {
-            alert("🛑 ROLE CONFLICT:\n\nAn Issuer cannot also be the Receiver on the same permit. Please use a different person.");
-            return;
+    const requiredEngineerValues: Record<string, string | number | null> = {
+        itwocxNumber, location, issuedDate, commencementDate, endDate, excavationType, scopeOfWorks
+    };
+    const isMissing = (value: unknown) => !String(value ?? '').trim();
+    const missingEngineerFields = Object.keys(requiredEngineerValues).filter(field => isMissing(requiredEngineerValues[field]));
+    const missingPartAItems = partAItems.filter(item => isMissing(item.answer));
+    const receiverChecklistApplies = excavationType !== 'hydro' && excavationType !== 'hand';
+    const missingReceiverItems = receiverChecklistApplies ? receiverItems.filter(item => isMissing(item.answer)) : [];
+    const engineerMissingCount = missingEngineerFields.length + missingPartAItems.length;
+    const receiverSignBlockers = [
+        ...(missingEngineerFields.length ? ['Site Engineer (Part A) details'] : []),
+        ...(missingPartAItems.length ? ['Site Engineer (Part A) checklist'] : []),
+        ...(missingReceiverItems.length ? ['Receiver checklist'] : [])
+    ];
+    const canReceiverSign = receiverSignBlockers.length === 0;
+    const receiverSignWarning = `Complete the applicable sections before the Receiver can sign. Missing: ${receiverSignBlockers.join(', ')}.`;
+    const requiredBadge = <span className="ml-2 inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-black uppercase text-red-700">Required</span>;
+    const missingField = (field: string) => isMissing(requiredEngineerValues[field]);
+
+    const updateField = async (field: keyof Permit, value: any): Promise<boolean> => {
+        if (field === 'receiverSignature' && value && !canReceiverSign) {
+            alert(receiverSignWarning);
+            return false;
         }
-        syncQuietly({ ...base, [field]: value } as Permit);
+        if (
+            isClosed ||
+            (arePermitDatesLocked && ['issuedDate', 'commencementDate', 'endDate'].includes(field)) ||
+            (isPartAReadOnly && ['siteEngineerSignature', 'receiverSignature', 'issuerSignature', 'location', 'excavationType', 'scopeOfWorks'].includes(field))
+        ) return false;
+        const base = field === 'receiverSignature' || field === 'issuerSignature' ? flushAndBuildPermit() : (permitRef.current || permit) as Permit;
+        if (field === 'issuerSignature' && value) {
+            if (!validateRequiredEngineerFields(base) || !canReceiverSign) {
+                if (!canReceiverSign) alert(receiverSignWarning);
+                return false;
+            }
+            if (!base.siteEngineerSignature?.data || !base.receiverSignature?.data) {
+                alert('Engineer and Receiver signatures are required before the Issuer signs.');
+                return false;
+            }
+            if (['knownServicesScanned', 'servicesMarked', 'potholingMarkers', 'transpowerDesignation', 'watercareWorksOver'].some(key => !base[key as keyof Permit])) {
+                alert('All five Issuer verification checks are required before signing.');
+                return false;
+            }
+        }
+        const otherRoleSignature = field === 'receiverSignature' ? base.issuerSignature : field === 'issuerSignature' ? base.receiverSignature : null;
+        if (otherRoleSignature && value?.name && (normalizeName(value.name) === normalizeName(otherRoleSignature.name) || (value.email && value.email === String(otherRoleSignature.email || (field === 'receiverSignature' ? base.issuerEmail : base.receiverEmail) || '').trim().toLowerCase()))) {
+            alert("🛑 ROLE CONFLICT:\n\nAn Issuer cannot also be the Receiver on the same permit. Please use a different person.");
+            return false;
+        }
+        try {
+            return await syncToFirebase({
+                ...base,
+                [field]: value,
+                ...(field === 'receiverSignature' && value?.email
+                    ? { receiverEmail: value.email, receiverName: value.name, receiver: value.name, receiverId: undefined, receiverUid: undefined }
+                    : {})
+            } as Permit);
+        } catch {
+            alert('Unable to save the permit change. Please try again.');
+            return false;
+        }
     };
 
     const updateChecklist = (listName: 'partAChecklist' | 'receiverChecklist' | 'partBChecklist', itemId: string, field: 'answer' | 'comment', value: string) => {
         if (isClosed) return;
-        if (isIssued && (listName === 'partAChecklist' || listName === 'receiverChecklist')) return;
+        if (isPartAReadOnly && (listName === 'partAChecklist' || listName === 'receiverChecklist')) return;
 
-        let currentList = listName === 'partAChecklist' ? partAItems : (listName === 'receiverChecklist' ? receiverItems : partBItems);
         const latest = (permitRef.current || permit) as Permit;
+        const latestList = latest[listName];
+        const currentList = Array.isArray(latestList) && latestList.length > 0
+            ? latestList
+            : listName === 'partAChecklist' ? partAItems : (listName === 'receiverChecklist' ? receiverItems : partBItems);
         const updatedList = currentList.map(item => item.id === itemId ? { ...item, [field]: value } : item);
-        syncQuietly({ ...latest, [listName]: updatedList } as Permit);
+        const updated = { ...latest, [listName]: updatedList } as Permit;
+        if (listName === 'partAChecklist' || listName === 'receiverChecklist') {
+            setPermit(updated);
+            syncToFirebase(updated).then(saved => {
+                if (!saved) setPermit(current => current === updated ? latest : current);
+            }).catch(() => {
+                if (permitRef.current === updated) permitRef.current = latest;
+                setPermit(current => current === updated ? latest : current);
+                alert('Unable to save the checklist. Please try again.');
+            });
+        } else {
+            syncQuietly(updated);
+        }
     };
 
     const updateApproverComment = (itemId: string, value: string) => {
@@ -435,7 +572,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     };
 
     const updateIssuerComment = (key: string, value: string) => {
-        if (isIssued || isClosed) return;
+        if (isIssuedPermit || isClosed || permit.issuerSignature?.data) return;
         const latest = (permitRef.current || permit) as Permit;
         syncQuietly({ ...latest, issuerComments: { ...(latest.issuerComments || {}), [key]: value } });
     };
@@ -482,18 +619,55 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         }
     };
 
-    const handleClosureEvidenceUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: 'dailySignOffUrl' | 'crewRegistrationUrl') => {
+    // One photo of the shared paper sheet satisfies both Crew Registration and Daily Sign Off
+    const handleClosureEvidenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (isClosed || !e.target.files || e.target.files.length === 0 || !permit) return;
         if (!isOnline) { alert("🛑 NO INTERNET\n\nYou must be connected to the internet to upload the required closure evidence."); e.target.value = ''; return; }
 
         try {
             const file = e.target.files[0];
             const compressedDataUrl = await compressImageToJpeg(file);
-            const cloudUrl = await uploadImageToStorage(compressedDataUrl, `${field}_${permit.itwocxNumber || permit.permitNumber || 'permit'}_${Date.now()}.jpg`);
-            await syncToFirebase({ ...permit, [field]: cloudUrl } as Permit);
+            const cloudUrl = await uploadImageToStorage(compressedDataUrl, `closureEvidence_${permit.itwocxNumber || permit.permitNumber || 'permit'}_${Date.now()}.jpg`);
+            await syncToFirebase({ ...(permitRef.current || permit), dailySignOffUrl: cloudUrl, crewRegistrationUrl: cloudUrl } as Permit);
         } catch (err) {
-            alert(`Error uploading ${field === 'dailySignOffUrl' ? 'Daily Sign Off' : 'Crew Registration'} evidence. Check internet connection.`);
+            alert('Error uploading Daily Sign Off & Crew Registration evidence. Check internet connection.');
         } finally { e.target.value = ''; }
+    };
+
+    const handleAddNote = async () => {
+        const text = noteDraft.trim();
+        if (!text || isClosed || isSavingNote || !permit) return;
+        setIsSavingNote(true);
+        try {
+            const base = (permitRef.current || permit) as Permit;
+            const timestamp = new Date().toISOString();
+            const legacyText = String(base.otherNotes || '').trim();
+            const history: PermitNote[] = Array.isArray(base.notesHistory) ? [...base.notesHistory] : [];
+            // Preserve pre-existing single-field notes as the first read-only entry
+            if (history.length === 0 && legacyText) {
+                history.push({ text: legacyText, author: String(base.notesAuthor || 'Unknown user'), timestamp: String(base.notesUpdatedAt || base.createdAt || timestamp) });
+            }
+            history.push({ text, author: currentUserDisplayName, timestamp });
+            // otherNotes mirrors the history so the PDF and closure audit keep working
+            const mirrored = `${legacyText ? legacyText + '\n' : ''}[${new Date(timestamp).toLocaleString()}] ${currentUserDisplayName}: ${text}`;
+            const ok = await syncToFirebase({ ...base, notesHistory: history, otherNotes: mirrored, notesAuthor: currentUserDisplayName, notesUpdatedAt: timestamp } as Permit);
+            if (ok) { setOtherNotes(mirrored); setNoteDraft(''); }
+        } catch (err) {
+            alert('Could not save the note. Check your connection and try again.');
+        } finally {
+            setIsSavingNote(false);
+        }
+    };
+
+    const handleClosureEvidenceDelete = async () => {
+        if (isClosed || !permit || isSubmitting) return;
+        if (!confirm('Remove this photo? You can upload a new one afterwards.')) return;
+        try {
+            // Empty strings (not undefined) so the Firestore merge actually overwrites the stored URLs
+            await syncToFirebase({ ...(permitRef.current || permit), dailySignOffUrl: '', crewRegistrationUrl: '' } as Permit);
+        } catch (err) {
+            alert('Could not remove the photo. Check internet connection.');
+        }
     };
 
     const handleApproverPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -519,36 +693,73 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     };
 
     const handleApproverSign = async (sig: Signature) => {
-        if (!isApprover) { alert(`🛑 ACTION DENIED:\n\nOnly an official Permit Approver can sign this section.`); return; }
-        if (!(permit as any).approverPhoto) { alert("🛑 MANDATORY PHOTO REQUIRED:\n\nYou must upload a photo of your physical site inspection before signing."); return; }
-        syncQuietly({ ...permit, approverSignature: sig } as Permit);
+        if (!(permit as any).approverPhoto) { alert("🛑 MANDATORY PHOTO REQUIRED:\n\nYou must upload a photo of your physical site inspection before signing."); return false; }
+        return syncToFirebase({ ...permit, approverSignature: sig } as Permit);
     };
 
     const handleSaveDailyLog = async () => {
+        if (isSubmitting) return;
         if (document.activeElement instanceof HTMLElement) { document.activeElement.blur(); }
-        await new Promise(resolve => setTimeout(resolve, 100));
-        if (isClosed || !dailyDate || !dailyRecSig || !dailyOpSig || !dailySpotSig) { alert("Missing signatures or Permit is Closed."); return; }
-        const newLog: DailySignOff = { id: generateId(), date: dailyDate, receiverSig: dailyRecSig, excavatorSig: dailyOpSig, spotterSig: dailySpotSig };
-        syncQuietly({ ...permit, dailyLogs: [...(permit.dailyLogs || []), newLog] } as Permit);
-        setDailyRecSig(null); setDailyOpSig(null); setDailySpotSig(null);
+        if (isClosed || !dailyRecSig || !dailyOpSig || !dailySpotSig) { alert("Missing signatures or Permit is Closed."); return; }
+        const newLog: DailySignOff = { id: generateId(), date: new Date().toISOString(), receiverSig: dailyRecSig, excavatorSig: dailyOpSig, spotterSig: dailySpotSig };
+        setIsSubmitting(true);
+        try {
+            await appendOperationalEntry('dailyLogs', newLog);
+            setDailyRecSig(null); setDailyOpSig(null); setDailySpotSig(null);
+        } catch (error) {
+            logDebugError('Daily sign-on failed', error);
+            alert('Unable to save the sign-on entry. Please try again.');
+        } finally { setIsSubmitting(false); }
+    };
+
+    const appendOperationalEntry = async (field: 'dailyLogs' | 'crewMembers' | 'handoverLogs', entry: DailySignOff | CrewMember | HandoverLog) => {
+        const permitDoc = doc(db, getTargetCollection(), permit.id);
+        const updated = await runTransaction(db, async transaction => {
+            const snapshot = await transaction.get(permitDoc);
+            if (!snapshot.exists()) throw new Error('Permit no longer exists.');
+            const latest = snapshot.data() as Permit;
+            if (String(latest.status || '').toLowerCase() === 'closed') throw new Error('Permit is closed.');
+            const entries = Array.isArray(latest[field]) ? latest[field] : [];
+            if (field === 'handoverLogs' && entries.length >= 7) throw new Error('Maximum handovers reached.');
+            const next = [...entries, entry];
+            transaction.update(permitDoc, { [field]: sanitizeForFirestore(next) });
+            return { ...latest, [field]: next } as Permit;
+        });
+        permitRef.current = updated;
+        savePermit(updated);
+        setPermit(updated);
     };
 
     const handleRegisterCrew = async (sig: Signature) => {
-        const crewName = (newCrewName.trim() || sig.name || '').trim();
-        if (isClosed || !crewName) return;
-        const newMember: CrewMember = { id: generateId(), name: crewName, role: newCrewRole, signature: sig, dateInducted: new Date(newCrewDate + 'T08:00:00').toISOString() };
-        syncQuietly({ ...permit, crewMembers: [...(permit.crewMembers || []), newMember] } as Permit);
-        setNewCrewName('');
+        const crewName = sig.name.trim();
+        if (isClosed || !crewName) return false;
+        const newMember: CrewMember = { id: generateId(), name: crewName, role: newCrewRole, signature: sig, dateInducted: new Date().toISOString() };
+        try {
+            await appendOperationalEntry('crewMembers', newMember);
+            setNewCrewName('');
+            return true;
+        } catch (error) {
+            logDebugError('Crew registration failed', error);
+            alert('Unable to register the crew member. Please try again.');
+            return false;
+        }
     };
 
     const finalizeHandover = async () => {
-        const newReceiverName = (handoverReceiver.trim() || handoverSignature?.name || '').trim();
-        if (isClosed || !newReceiverName || !handoverSignature) return;
-        if (!isReceiver) { alert("Only an official Receiver can accept a handover."); return; }
+        const newReceiverName = (handoverSignature?.name || '').trim();
+        if (isClosed || !newReceiverName || !handoverSignature?.email) return;
+        if (handoverSignature.email === String(permit.issuerEmail || '').trim().toLowerCase()) { alert("The Issuer cannot be the Receiver on the same permit."); return; }
         if (currentHandovers.length >= 7) { alert("Max handovers reached."); return; }
-        const newHandover: HandoverLog = { id: generateId(), date: new Date().toISOString(), receiverName: newReceiverName, signature: handoverSignature, initial: handoverSignature };
-        syncQuietly({ ...permit, handoverLogs: [...currentHandovers, newHandover] } as Permit);
-        setHandoverReceiver(''); setHandoverSignature(null); setHandoverChecks({});
+        const newHandover: HandoverLog = { id: generateId(), date: new Date().toISOString(), receiverName: newReceiverName, receiverEmail: handoverSignature.email, signature: handoverSignature, initial: handoverSignature };
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+        try {
+            await appendOperationalEntry('handoverLogs', newHandover);
+            setHandoverSignature(null); setHandoverChecks({});
+        } catch (error) {
+            logDebugError('Handover registration failed', error);
+            alert('Unable to register the handover. Please try again.');
+        } finally { setIsSubmitting(false); }
     };
 
     // CIERRE LOBOTOMIZADO: GUARDA DE INMEDIATO EN FIREBASE PARA ACTIVAR EL BACKEND
@@ -558,25 +769,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             return;
         }
 
-        // 1. Indestructible Master Check (Checks Array OR String OR explicit Master email)
-        const isMaster = Boolean(
-            (Array.isArray(currentUser?.roles) && currentUser.roles.some((r: unknown) => String(r).toLowerCase() === 'master')) ||
-            (typeof currentUser?.roles === 'string' && currentUser.roles.toLowerCase().includes('master')) ||
-            (currentUser?.email === 'dietrich.truchsess@easternbusway.nz' || currentUser?.email === 'dietrich.truchsess@easternbusway.co.nz')
-        );
-
-        // 2. Safe Receiver Name Match (Case-insensitive, handles undefined)
-        const typedClean = String(closureReceiverName || '').trim().toLowerCase();
-        const receiverEmail = String(permit?.receiverEmail || permit?.receiver || '').trim().toLowerCase();
-        const dbNameClean = String(permit?.receiverName || permit?.receiverSignature?.name || getDisplayNameFromEmail(receiverEmail)).trim().toLowerCase();
-        const isNameMatch = (typedClean !== '' && typedClean === dbNameClean);
-
-        // 3. Safe Receiver Email Match
-        const isEmailMatch = Boolean(currentUser?.email && (currentUser.email.toLowerCase() === String(permit?.receiverEmail || permit?.receiver || '').toLowerCase()));
-
-        // 4. THE GATEKEEPER: Master bypasses everything. Receiver must match either Name OR Email.
-        if (!isMaster && !isNameMatch && !isEmailMatch) {
-            alert(`Only the assigned Receiver (${permit?.receiverName || 'Unknown'}) or a Master user can close this permit.`);
+        if (isClosureDeniedByHandover) {
+            alert(`Only the assigned Receiver (${activeReceiverEmail || permit?.receiverEmail || activeReceiverName || permit?.receiverName || permit?.receiver || 'Unknown'}) or a Master user can close this permit.`);
             return;
         }
 
@@ -588,12 +782,16 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         }
         if (!preClosureCheck1 && !preClosureCheck3) errors.push("Closure: Select 'Safe' or 'Outstanding'");
         if (preClosureCheck3 && !outstandingWorks.trim()) errors.push("Closure: Detail outstanding works");
-        if (!permit.dailySignOffUrl) errors.push("Daily Sign Off evidence is required before this permit can be closed.");
-        if (!permit.crewRegistrationUrl) errors.push("Crew Registration evidence is required before this permit can be closed.");
+        if (!hasDigitalDaily && !permit.dailySignOffUrl) errors.push("Daily Sign Off evidence is required before this permit can be closed.");
+        if (!hasDigitalCrew && !permit.crewRegistrationUrl) errors.push("Crew Registration evidence is required before this permit can be closed.");
         if (errors.length > 0) { alert(`🛑 ERRORS:\n\n${errors.join('\n')}`); return; }
         if (!confirm(`🛑 CRITICAL ACTION:\nYou are about to close this permit and finalize the job. Confirm?`)) return;
 
+        const closureDoc = doc(db, getTargetCollection(), permit.id);
         setIsSubmitting(true);
+        setClosureStage(1);
+        // Yield so iOS Safari can paint the processing state before the heavy work locks the main thread.
+        await new Promise(resolve => setTimeout(resolve, 300));
         const finalNotes = (otherNotes || '') + `\n\n--- SYSTEM AUDIT ---\n* Closed by: Firebase Authenticated Receiver\n* Timestamp: ${new Date().toLocaleString()}`;
 
         let updatedPermit: Permit = {
@@ -602,33 +800,50 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             closureChecklistOutstandingWorks: preClosureCheck3, closureOutstandingWorksDetails: outstandingWorks, otherNotes: finalNotes
         } as any;
 
-        setOtherNotes(finalNotes);
-
-        // 1. Generate PDF and upload to Firebase Storage BEFORE finalizing the sync
+        // Generate and secure the closure PDF before writing the closed permit.
         try {
+            const compressedForPdf = await compressPermitImagesForPdf(updatedPermit);
+            setPdfPermit(compressedForPdf);
+            await new Promise(resolve => setTimeout(resolve, 50));
             const pdfNode = await mountPDFLayout();
-            if (pdfNode) {
-                await new Promise(resolve => setTimeout(resolve, 800));
-                const pdf = await renderPagesToPdf(pdfNode);
-                await appendClosureEvidencePagesToPdf(pdf, updatedPermit);
+            if (!pdfNode) throw new Error('PDF layout could not be prepared.');
+            await new Promise(resolve => setTimeout(resolve, 800));
+            const pdf = await renderPagesToPdf(pdfNode);
+            await appendClosureEvidencePagesToPdf(pdf, {
+                ...updatedPermit,
+                dailySignOffUrl: compressedForPdf.dailySignOffUrl,
+                crewRegistrationUrl: compressedForPdf.crewRegistrationUrl
+            } as Permit);
 
-                const rawNumber = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || "").replace(/\D/g, "");
-                const pdfBase64 = pdf.output('datauristring').split(',')[1];
-
-                try {
-                    const storage = getStorage();
-                    const pdfRef = ref(storage, `pdf_backups/PF${rawNumber}_${new Date().getTime()}.pdf`);
-                    await uploadString(pdfRef, pdfBase64, 'base64', { contentType: 'application/pdf' });
-                    const downloadUrl = await getDownloadURL(pdfRef);
-                    updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl } as any;
-                } catch (storageError) { console.error("Backup PDF Error:", storageError); }
+            const rawNumber = String(updatedPermit.itwocxNumber || updatedPermit.permitNumber || "").replace(/\D/g, "");
+            const pdfBase64 = pdf.output('datauristring').split(',')[1];
+            const storage = getStorage();
+            const pdfRef = ref(storage, `pdf_backups/PF${rawNumber}_${new Date().getTime()}.pdf`);
+            setClosureStage(2);
+            await new Promise(resolve => setTimeout(resolve, 50));
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            try {
+                await Promise.race([
+                    uploadString(pdfRef, pdfBase64, 'base64', { contentType: 'application/pdf' }),
+                    new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('PDF backup upload timed out.')), 15000); })
+                ]);
+            } finally {
+                if (timeout) clearTimeout(timeout);
             }
-        } catch (error: any) {
-            console.error(`Error generating PDF: ${error.message}`);
+            const downloadUrl = await getDownloadURL(pdfRef);
+            updatedPermit = { ...updatedPermit, pdfBackupUrl: downloadUrl };
+        } catch (error) {
+            console.error('Error securing closure PDF:', error);
+            alert('Unable to secure the closure PDF. The permit was not closed; please try again.');
+            setIsSubmitting(false);
+            setClosureStage(null);
+            return;
         } finally {
             setIsPreparingPDF(false);
+            setPdfPermit(null);
         }
 
+        setClosureStage(3);
         // 2. Apply Filtering Rule for 'Breaking Ground' family and finalize sync
         const pTypeCheck = String(updatedPermit.permitType || '').toUpperCase();
         const isBreakingGround = ['BG', 'BGP', 'BE', 'EXCAVATION'].includes(pTypeCheck);
@@ -643,20 +858,61 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
             } as any;
         }
 
-        await syncToFirebase(updatedPermit);
-
-        if (isBreakingGround) {
-            await setDoc(doc(db, 'permits', updatedPermit.id), sanitizeForFirestore({
-                ...updatedPermit,
-                syncStatus: 'pending',
-                sync_status: 'pending',
-                cxSyncPending: 'closure',
-                cxSyncError: null
-            }), { merge: true });
+        try {
+            if (await hasDuplicatePermitNumber(updatedPermit)) {
+                setDuplicatePermitError(true);
+                alert('Error: Permit number already exists.');
+                return;
+            }
+            const closedPermit = await runTransaction(db, async transaction => {
+                const snapshot = await transaction.get(closureDoc);
+                if (!snapshot.exists()) throw new Error('Permit no longer exists.');
+                const latest = snapshot.data() as Permit;
+                if (String(latest.status || '').toLowerCase() === 'closed' || latest.isDraft === true || latest.ceaseWorksRecord) {
+                    throw new Error('Permit status or cease-works state has changed.');
+                }
+                const aclSnapshot = await transaction.get(doc(db, 'appSettings', 'global'));
+                const latestAcl = aclSnapshot.data()?.roleAssignments;
+                if (!isMaster && (!Array.isArray(latestAcl) || !isCurrentUserActiveReceiver(latest, currentUser, latestAcl))) {
+                    throw new Error('Receiver access could not be verified.');
+                }
+                if (activeReceiverKey(latest) !== activeReceiverKey(permit)) {
+                    throw new Error('The active Receiver has changed.');
+                }
+                const latestHydro = latest.excavationType === 'hydro' || latest.excavationType === 'hand';
+                if (!latestHydro && !latest.approverSignature?.data && !isMaster) {
+                    throw new Error('Mechanical excavation requires Part B approval.');
+                }
+                if (!(latest.dailyLogs?.length || latest.dailySignOffUrl) || !(latest.crewMembers?.length || latest.crewRegistrationUrl)) {
+                    throw new Error('Closure evidence is no longer available.');
+                }
+                const closureFields = {
+                    status: updatedPermit.status,
+                    closureSignature: updatedPermit.closureSignature,
+                    closureReceiverName: updatedPermit.closureReceiverName,
+                    closureDate: updatedPermit.closureDate,
+                    closureChecklistExcavationSafe: updatedPermit.closureChecklistExcavationSafe,
+                    closureChecklistAsBuiltReturned: updatedPermit.closureChecklistAsBuiltReturned,
+                    closureChecklistOutstandingWorks: updatedPermit.closureChecklistOutstandingWorks,
+                    closureOutstandingWorksDetails: updatedPermit.closureOutstandingWorksDetails,
+                    otherNotes: (latest.otherNotes || '') + `\n\n--- SYSTEM AUDIT ---\n* Closed by: Firebase Authenticated Receiver\n* Timestamp: ${new Date().toLocaleString()}`,
+                    pdfBackupUrl: updatedPermit.pdfBackupUrl,
+                    ...(isBreakingGround ? { syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'closure', cxSyncError: null } : {})
+                };
+                transaction.set(closureDoc, sanitizeForFirestore(closureFields), { merge: true });
+                return { ...latest, ...closureFields } as Permit;
+            });
+            permitRef.current = closedPermit;
+            setPermit(closedPermit);
+            setOtherNotes(closedPermit.otherNotes);
+            alert("Permit successfully closed.");
+        } catch (error) {
+            console.error('Error saving permit closure:', error);
+            alert(`Unable to save the permit closure: ${error instanceof Error ? error.message : 'Unknown error'}. Reload the permit before retrying.`);
+        } finally {
+            setIsSubmitting(false);
+            setClosureStage(null);
         }
-
-        setIsSubmitting(false);
-        alert("Permit successfully closed.");
     };
 
     const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -715,6 +971,10 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
             // 1. Generate PDF and upload to Firebase Storage BEFORE finalizing the sync
             try {
+                setClosureStage('1/3: Compressing Photos...');
+                await new Promise(resolve => setTimeout(resolve, 300));
+                setPdfPermit(await compressPermitImagesForPdf(permit));
+                setClosureStage('2/3: Generating PDF...');
                 const pdfNode = await mountPDFLayout();
                 if (pdfNode) {
                     await new Promise(resolve => setTimeout(resolve, 800));
@@ -736,8 +996,10 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                 console.error("Protocol error", error);
             } finally {
                 setIsPreparingPDF(false);
+                setPdfPermit(null);
             }
 
+            setClosureStage('3/3: Syncing to CX...');
             // 2. Apply Filtering Rule for 'Breaking Ground' family and finalize sync
             const pTypeCheck = String(updatedPermit.permitType || '').toUpperCase();
             const isBreakingGround = ['BG', 'BGP', 'BE', 'EXCAVATION'].includes(pTypeCheck);
@@ -753,6 +1015,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
         await syncToFirebase(updatedPermit as Permit);
 
         setIsSubmitting(false);
+        setClosureStage('');
         if (ceaseAction === 'cancelled') {
             alert("Permit successfully closed.");
         } else {
@@ -797,11 +1060,19 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     )}
 
                     {isSubmitting && (
-                        <div className="fixed inset-0 z-[9999] bg-gray-900/90 backdrop-blur-sm flex flex-col items-center justify-center text-white px-4">
+                        <div role="status" aria-live="polite" className="fixed inset-0 z-[9999] bg-gray-900/90 backdrop-blur-sm flex flex-col items-center justify-center text-white px-4">
                             <Loader2 size={80} className="animate-spin text-blue-500 mb-6" />
-                            <h2 className="text-3xl font-black uppercase tracking-widest text-center">Processing...</h2>
+                            <h2 className="text-3xl font-black uppercase tracking-widest text-center">{closureStage ? 'Closing Permit' : 'Processing...'}</h2>
                             <p className="text-gray-300 mt-4 text-center text-lg font-bold">Please do not close the application.</p>
-                            <p className="text-gray-400 mt-2 text-center text-sm">Generating PDF and securing files...</p>
+                            {closureStage && (
+                                <ol className="mt-6 space-y-3 text-sm sm:text-base font-bold">
+                                    {['Generating closure PDF', 'Securing PDF backup', 'Saving closure and finalizing'].map((label, index) => (
+                                        <li key={label} aria-current={closureStage === index + 1 ? 'step' : undefined} className={closureStage === index + 1 ? 'text-white' : 'text-gray-400'}>
+                                            {index + 1}/3 {label}{closureStage === index + 1 ? '...' : closureStage > index + 1 ? ' ✓' : ''}
+                                        </li>
+                                    ))}
+                                </ol>
+                            )}
                         </div>
                     )}
 
@@ -822,7 +1093,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                     <div className={`w-full max-w-full min-w-0 overflow-x-hidden box-border xl:max-w-6xl mx-auto pb-12 mt-6 print:hidden relative z-10 ${!isOnline ? 'mt-12' : ''}`}>
                         <div className="flex justify-between items-center mb-6">
                             <button onClick={onBack} className="text-gray-500 font-bold flex items-center gap-1"><ArrowLeft size={16} /> Back to Register</button>
-                            <button onClick={handleSafePrint} disabled={isPrinting} className="bg-gray-900 disabled:bg-gray-500 text-white px-5 py-2 rounded-xl font-bold shadow-lg flex items-center gap-2"><Printer size={18} /> {isPrinting ? 'Preparing...' : 'Print Copy'}</button>
+                            <PrintPermitButton onBeforePrint={prepareForPrint} className="px-5 rounded-xl" />
                         </div>
 
                         <div className="bg-white rounded-t-2xl border border-gray-200 p-6 md:p-8 flex justify-between shadow-sm items-center relative">
@@ -849,8 +1120,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         {isExecutionBlocked && <div className="bg-amber-100 text-amber-800 p-4 text-center font-black uppercase tracking-widest border-b-4 border-amber-300 mt-4">⚠️ Mechanical Work Pending. Awaiting Permit Approver to sign Part B.</div>}
 
                         <div className="flex border-b-4 border-gray-100 bg-white sticky top-0 z-40 shadow-sm overflow-x-auto hide-scrollbar mt-4">
-                            <button onClick={() => setActiveTab('engineer')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'engineer' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Engineer {isIssued && <Lock size={12} />}</button>
-                            <button onClick={() => setActiveTab('receiver_checklist')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'receiver_checklist' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Receiver Checklist {isIssued && <Lock size={12} />}</button>
+                            <button onClick={() => setActiveTab('engineer')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'engineer' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Engineer {engineerMissingCount > 0 && <span className="rounded-full bg-red-600 px-2 py-0.5 text-white" aria-label={`${engineerMissingCount} missing items`}>{engineerMissingCount}</span>} {isIssued && <Lock size={12} />}</button>
+                            <button onClick={() => setActiveTab('receiver_checklist')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'receiver_checklist' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Receiver Checklist {missingReceiverItems.length > 0 && <span className="rounded-full bg-red-600 px-2 py-0.5 text-white" aria-label={`${missingReceiverItems.length} missing items`}>{missingReceiverItems.length}</span>} {isIssued && <Lock size={12} />}</button>
                             <button onClick={() => setActiveTab('issuer')} className={`px-4 py-4 text-xs font-black uppercase flex items-center gap-2 whitespace-nowrap transition-colors ${activeTab === 'issuer' ? 'text-blue-700 border-b-4 border-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-50'}`}>Issuer {isIssued && <CheckCircle size={14} className="text-green-500" />}</button>
 
                             {!isHydro && (
@@ -868,25 +1139,25 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                         <div className="bg-white shadow-xl border p-4 md:p-8 min-h-[600px] relative">
 
                             <div className={activeTab === 'engineer' ? 'block animate-fade-in' : 'hidden'}>
-                                <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
-                                    <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
+                                <div className={isPartAReadOnly ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
+                                    <fieldset disabled={isPartAReadOnly} className="border-0 p-0 m-0 min-w-0">
                                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                                             <h3 className="font-black text-xl text-blue-900 uppercase">Engineer (Part A)</h3>
                                             <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">Ref: PDF Pg 4/12</span>
                                         </div>
-                                        {isIssued && <div className="bg-gray-100 text-gray-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-center gap-2"><Lock size={16} /> This planning section is locked because the permit has been issued.</div>}
+                                        {isPartAReadOnly && <div className="bg-gray-100 text-gray-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-center gap-2"><Lock size={16} /> This planning section is locked after the Issuer signs or issues the permit.</div>}
 
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
-                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">ITWOCX Permit # *</p><input type="text" className={requiredInputClass('itwocxNumber')} value={itwocxNumber} onChange={e => setItwocxNumber(e.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} placeholder="Enter ITWOCX permit number" /></div>
-                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location</p><input type="text" className={requiredInputClass('location')} value={location} onChange={v => setLocation(v.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} /></div>
-                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Issued Date</p><input type="date" className={requiredInputClass('issuedDate')} value={issuedDate} onChange={v => setIssuedDate(v.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
-                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Commencement Date (Start Date)</p><input type="date" className={requiredInputClass('commencementDate')} value={commencementDate} onChange={v => { setCommencementDate(v.target.value); setEndDate(v.target.value ? addDaysISO(v.target.value, 7) : ''); }} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
-                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit End Date</p><input type="date" className={requiredInputClass('endDate')} value={endDate} onChange={v => setEndDate(v.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
-                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Excavation Type</p><select className={requiredInputClass('excavationType')} value={excavationType} onChange={e => setExcavationType(e.target.value)} disabled={isIssued || isClosed}><option value="">Select excavation type</option><option value="mechanical">Mechanical Excavation</option><option value="hydro">Hydro Excavation</option><option value="hand">Hand Digging</option></select></div>
-                                            <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works</p><textarea className={`${requiredInputClass('scopeOfWorks')} h-20`} value={scopeOfWorks} onChange={v => setScopeOfWorks(v.target.value)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed}></textarea></div>
+                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">ITWOCX Permit # * {missingField('itwocxNumber') && requiredBadge}</p><input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={9} className={requiredInputClass(missingField('itwocxNumber'))} aria-invalid={missingField('itwocxNumber')} value={itwocxNumber ?? ''} onChange={e => setItwocxNumber(toPermitNumber(e.target.value))} disabled={isPartAReadOnly} readOnly={isPartAReadOnly} placeholder="Enter ITWOCX permit number" /></div>
+                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Work Location {missingField('location') && requiredBadge}</p><input type="text" className={requiredInputClass(missingField('location'))} aria-invalid={missingField('location')} value={location} onChange={v => setLocation(v.target.value)} disabled={isPartAReadOnly} readOnly={isPartAReadOnly} /></div>
+                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Issued Date {missingField('issuedDate') && requiredBadge}</p><input type="date" className={requiredInputClass(missingField('issuedDate'))} aria-invalid={missingField('issuedDate')} value={issuedDate} onChange={v => setIssuedDate(v.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit Commencement Date (Start Date) {missingField('commencementDate') && requiredBadge}</p><input type="date" className={requiredInputClass(missingField('commencementDate'))} aria-invalid={missingField('commencementDate')} value={commencementDate} onChange={v => { setCommencementDate(v.target.value); setEndDate(v.target.value ? addDaysISO(v.target.value, 7) : ''); }} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Permit End Date {missingField('endDate') && requiredBadge}</p><input type="date" className={requiredInputClass(missingField('endDate'))} aria-invalid={missingField('endDate')} value={endDate} onChange={v => setEndDate(v.target.value)} disabled={arePermitDatesLocked} readOnly={arePermitDatesLocked} /></div>
+                                            <div><p className="text-xs text-gray-500 font-bold uppercase mb-1">Excavation Type {missingField('excavationType') && requiredBadge}</p><select className={requiredInputClass(missingField('excavationType'))} aria-invalid={missingField('excavationType')} value={excavationType} onChange={e => setExcavationType(e.target.value)} disabled={isPartAReadOnly}><option value="">Select excavation type</option><option value="mechanical">Mechanical Excavation</option><option value="hydro">Hydro Excavation</option><option value="hand">Hand Digging</option></select></div>
+                                            <div className="md:col-span-2 border-t pt-4 mt-2"><p className="text-xs text-gray-500 font-bold uppercase mb-2">Scope of Works {missingField('scopeOfWorks') && requiredBadge}</p><textarea className={`${requiredInputClass(missingField('scopeOfWorks'))} h-20`} aria-invalid={missingField('scopeOfWorks')} value={scopeOfWorks} onChange={v => setScopeOfWorks(v.target.value)} disabled={isPartAReadOnly} readOnly={isPartAReadOnly}></textarea></div>
                                         </div>
 
-                                        {!isIssued && !isClosed && (
+                                        {!isPartAReadOnly && (
                                             <div className="mb-8">
                                                 <button type="button" onClick={(e) => { e.preventDefault(); handleSaveDraft(); }} disabled={isSubmitting} className="w-full bg-blue-700 hover:bg-blue-800 disabled:bg-gray-400 text-white py-4 rounded-xl font-black uppercase shadow-lg flex items-center justify-center gap-2">
                                                     {isSubmitting ? <><Loader2 size={18} className="animate-spin" /> Saving...</> : 'Save & Sync Permit'}
@@ -898,11 +1169,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                                         <div className="space-y-4 mb-10 border-b border-gray-100 pb-10">
                                             {partAItems.map(item => (
-                                                <div key={item.id} className="flex flex-col md:flex-row gap-4 border-b border-gray-100 pb-4 last:border-0">
-                                                    <div className="flex-1"><span className="font-black text-blue-600 mr-2">{String(item.id).replace(/[a-z]/g, '')}.</span><span className="text-sm font-bold text-gray-800 leading-relaxed">{item.question}</span></div>
+                                                <div key={item.id} className={`flex flex-col md:flex-row gap-4 border rounded-lg p-3 ${isMissing(item.answer) ? 'border-red-500 bg-red-50/60' : 'border-gray-100'}`}>
+                                                    <div className="flex-1"><span className="font-black text-blue-600 mr-2">{String(item.id).replace(/[a-z]/g, '')}.</span><span className="text-sm font-bold text-gray-800 leading-relaxed">{item.question}</span>{isMissing(item.answer) && requiredBadge}</div>
                                                     <div className="flex flex-col sm:flex-row gap-2 w-full md:w-80 shrink-0">
-                                                        <SyncedSelect className={inputClass + " sm:w-24"} value={item.answer || ''} onValueChange={v => updateChecklist('partAChecklist', item.id, 'answer', v)} disabled={isIssued || isClosed}><option value="">- PEND -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></SyncedSelect>
-                                                        <DebouncedInput type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onValueChange={v => updateChecklist('partAChecklist', item.id, 'comment', v)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} />
+                                                        <SyncedSelect className={requiredInputClass(isMissing(item.answer)) + " sm:w-24"} aria-label={item.question} aria-invalid={isMissing(item.answer)} value={item.answer || ''} onValueChange={v => updateChecklist('partAChecklist', item.id, 'answer', v)} disabled={isPartAReadOnly}><option value="">- PEND -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></SyncedSelect>
+                                                        <DebouncedInput type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onValueChange={v => updateChecklist('partAChecklist', item.id, 'comment', v)} disabled={isPartAReadOnly} readOnly={isPartAReadOnly} />
                                                     </div>
                                                 </div>
                                             ))}
@@ -912,18 +1183,31 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                             <div className="bg-gray-50 p-6 rounded-2xl border shadow-sm">
                                                 <p className="text-center font-black uppercase text-xs mb-4 tracking-widest text-gray-500 border-b pb-2">Site Engineer Signature</p>
                                                 {permit.siteEngineerSignature && isIssued ? (
-                                                    <div className="text-center"><img src={permit.siteEngineerSignature?.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.siteEngineerSignature?.name}</p></div>
+                                                    <div className="text-center">{permit.siteEngineerSignature.type === 'draw' && <img src={permit.siteEngineerSignature.data} className="h-16 mx-auto mix-blend-multiply" alt="Signature" />}<p className="font-bold text-sm uppercase">{permit.siteEngineerSignature.name}</p></div>
                                                 ) : (
-                                                    <SignaturePad label="Sign here" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} readOnly={isIssued || isClosed} />
+                                                    <AclSignature users={aclUsers} role="Site Engineer" label="Sign here" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} readOnly={isIssued || isClosed} />
                                                 )}
                                             </div>
 
                                             <div className="bg-blue-50 p-6 rounded-2xl border border-blue-200 shadow-sm relative">
                                                 <p className="text-center font-black uppercase text-xs mb-4 tracking-widest text-blue-800 border-b border-blue-200 pb-2">Receiver Initial Signature (Induction)</p>
                                                 {permit.receiverSignature && isIssued ? (
-                                                    <div className="text-center"><img src={permit.receiverSignature?.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase text-blue-900">{permit.receiverSignature?.name}</p></div>
+                                                    <div className="text-center">{permit.receiverSignature.type === 'draw' && <img src={permit.receiverSignature.data} className="h-16 mx-auto mix-blend-multiply" alt="Signature" />}<p className="font-bold text-sm uppercase text-blue-900">{permit.receiverSignature.name}</p></div>
                                                 ) : (
-                                                    <SignaturePad label="Sign here" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} readOnly={isIssued || isClosed} />
+                                                    <>
+                                                        {!canReceiverSign && !permit.receiverSignature && (
+                                                            <p className="text-xs text-red-700 font-bold mb-3 bg-red-50 p-3 rounded-lg border-2 border-red-500 text-left">{receiverSignWarning}</p>
+                                                        )}
+                                                        <div className={!canReceiverSign && !permit.receiverSignature ? 'opacity-40 pointer-events-none' : ''}>
+                                                            <AclSignature users={aclUsers} role="Receiver" label="Sign here" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} excludeEmail={permit.issuerEmail} validateUser={user => {
+                                                                if (permit.issuerSignature && normalizeName(`${user.firstName || ''} ${user.lastName || ''}`) === normalizeName(permit.issuerSignature.name)) {
+                                                                    alert("An Issuer cannot also be the Receiver on the same permit.");
+                                                                    return false;
+                                                                }
+                                                                return true;
+                                                            }} readOnly={isIssued || isClosed || (!canReceiverSign && !permit.receiverSignature)} />
+                                                        </div>
+                                                    </>
                                                 )}
                                             </div>
                                         </div>
@@ -932,15 +1216,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                             </div>
 
                             <div className={activeTab === 'receiver_checklist' ? 'block animate-fade-in' : 'hidden'}>
-                                <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
-                                    <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
+                                <div className={isPartAReadOnly ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
+                                    <fieldset disabled={isPartAReadOnly} className="border-0 p-0 m-0 min-w-0">
                                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                                             <h3 className="font-black text-xl text-blue-900 uppercase">Receiver Checklist</h3>
                                             <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">Ref: PDF Pg 6/12</span>
                                         </div>
-                                        {isIssued && <div className="bg-gray-100 text-gray-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-center gap-2"><Lock size={16} /> This pre-work checklist is locked because the permit has been issued.</div>}
+                                        {isPartAReadOnly && <div className="bg-gray-100 text-gray-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-center gap-2"><Lock size={16} /> This pre-work checklist is locked after the Issuer signs or issues the permit.</div>}
 
-                                        {isHydro ? (
+                                        {!receiverChecklistApplies ? (
                                             <div className="bg-blue-50 border-4 border-blue-200 p-10 rounded-[2rem] text-center mb-8 shadow-inner animate-fade-in">
                                                 <Info size={48} className="mx-auto mb-4 text-blue-500" />
                                                 <h3 className="text-xl font-black text-blue-800 uppercase mb-2">Excavation is Hydro / Hand</h3>
@@ -950,11 +1234,11 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                             <div className="space-y-4 mb-10">
                                                 <p className="text-red-600 font-bold text-xs bg-red-50 p-3 rounded-lg border border-red-100 uppercase mb-6">Checks to be made BEFORE mechanical digging (Editable by Receiver).</p>
                                                 {receiverItems.map(item => (
-                                                    <div key={item.id} className="flex flex-col md:flex-row gap-4 border-b border-gray-100 pb-4 last:border-0">
-                                                        <div className="flex-1"><span className="font-black text-blue-600 mr-2">{item.id}.</span><span className="text-sm font-bold text-gray-800">{item.question}</span></div>
+                                                    <div key={item.id} className={`flex flex-col md:flex-row gap-4 border rounded-lg p-3 ${isMissing(item.answer) ? 'border-red-500 bg-red-50/60' : 'border-gray-100'}`}>
+                                                        <div className="flex-1"><span className="font-black text-blue-600 mr-2">{item.id}.</span><span className="text-sm font-bold text-gray-800">{item.question}</span>{isMissing(item.answer) && requiredBadge}</div>
                                                         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-80 shrink-0">
-                                                            <SyncedSelect className={inputClass + " sm:w-24"} value={item.answer || ''} onValueChange={v => updateChecklist('receiverChecklist', item.id, 'answer', v)} disabled={isIssued || isClosed}><option value="">- PEND -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></SyncedSelect>
-                                                            <DebouncedInput type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onValueChange={v => updateChecklist('receiverChecklist', item.id, 'comment', v)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} />
+                                                            <SyncedSelect className={requiredInputClass(isMissing(item.answer)) + " sm:w-24"} aria-label={item.question} aria-invalid={isMissing(item.answer)} value={item.answer || ''} onValueChange={v => updateChecklist('receiverChecklist', item.id, 'answer', v)} disabled={isPartAReadOnly}><option value="">- PEND -</option><option value="yes">YES</option><option value="no">NO</option><option value="n/a">N/A</option></SyncedSelect>
+                                                            <DebouncedInput type="text" placeholder="Comment..." className={inputClass + " flex-1"} value={item.comment || ''} onValueChange={v => updateChecklist('receiverChecklist', item.id, 'comment', v)} disabled={isPartAReadOnly} readOnly={isPartAReadOnly} />
                                                         </div>
                                                     </div>
                                                 ))}
@@ -965,8 +1249,8 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                             </div>
 
                             <div className={activeTab === 'issuer' ? 'block animate-fade-in' : 'hidden'}>
-                                <div className={(isIssued || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
-                                    <fieldset disabled={isIssued || isClosed} className="border-0 p-0 m-0 min-w-0">
+                                <div className={(isIssuedPermit || isClosed) ? 'pointer-events-none opacity-95' : 'select-text pointer-events-auto'}>
+                                    <fieldset disabled={isIssuedPermit || isClosed} className="border-0 p-0 m-0 min-w-0">
                                         <div className="flex justify-between items-center border-b-2 border-blue-200 pb-2 mb-6">
                                             <h3 className="font-black text-xl text-blue-900 uppercase">Issuer Final Checks</h3>
                                             <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">Ref: PDF Pg 3/12</span>
@@ -987,20 +1271,20 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                         <div className="flex space-x-3 w-full sm:w-1/3 sm:justify-end">
                                                             {(['yes', 'no', 'n/a'] as const).map(opt => (
                                                                 <label key={opt} className="flex items-center space-x-1 cursor-pointer">
-                                                                    <input type="radio" checked={permit[q.key as keyof Permit] === opt} onChange={() => updateField(q.key as keyof Permit, opt)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} className="h-5 w-5 text-blue-600 cursor-pointer" />
+                                                                    <input type="radio" checked={permit[q.key as keyof Permit] === opt} onChange={() => updateField(q.key as keyof Permit, opt)} disabled={isPartAReadOnly} readOnly={isPartAReadOnly} className="h-5 w-5 text-blue-600 cursor-pointer" />
                                                                     <span className="uppercase text-xs font-black text-gray-600">{opt}</span>
                                                                 </label>
                                                             ))}
                                                         </div>
                                                     </div>
-                                                    <DebouncedInput type="text" placeholder="Issuer comment..." aria-label={`Issuer comment for ${q.label}`} className={inputClass} value={permit.issuerComments?.[q.key] || ''} onValueChange={v => updateIssuerComment(q.key, v)} disabled={isIssued || isClosed} readOnly={isIssued || isClosed} />
+                                                    <DebouncedInput type="text" placeholder="Issuer comment..." aria-label={`Issuer comment for ${q.label}`} className={inputClass} value={permit.issuerComments?.[q.key] || ''} onValueChange={v => updateIssuerComment(q.key, v)} disabled={isPartAReadOnly} readOnly={isPartAReadOnly} />
                                                 </div>
                                             ))}
                                         </div>
 
                                         <div className="max-w-xl mx-auto border-2 border-green-500 p-8 rounded-2xl bg-green-50 shadow-md text-center">
                                             <h4 className="font-black uppercase text-green-900 mb-6 tracking-widest text-lg">Finalize & Issue to Field</h4>
-                                            {permit.issuerSignature && isIssued ? (
+                                            {permit.issuerSignature && isIssuedPermit ? (
                                                 <div className="animate-fade-in">
                                                     <div className="text-center bg-white p-4 rounded-xl shadow-inner mb-4"><img src={permit.issuerSignature?.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.issuerSignature?.name}</p></div>
                                                     <div className="bg-green-600 text-white p-3 rounded-lg font-black uppercase tracking-widest flex justify-center items-center gap-2 shadow-lg"><CheckCircle size={20} /> PERMIT ISSUED TO SITE (LOCKED)</div>
@@ -1008,7 +1292,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                 </div>
                                             ) : (
                                                 <div>
-                                                    <SignaturePad label="Issuer Signature" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} readOnly={isIssued || isClosed} />
+                                                    <SignaturePad label="Issuer Signature" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} readOnly={isPartAReadOnly} />
                                                     <button type="button" onClick={handleIssuePermit} disabled={isSubmitting} className={`mt-8 w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-green-600 text-white shadow-xl hover:bg-green-700 hover:scale-[1.02]'}`}>
                                                         {isSubmitting ? <Loader2 size={28} className="animate-spin" /> : <FileSignature size={28} />}
                                                         {isSubmitting ? 'ISSUING...' : 'ISSUE PERMIT (LOCK PLANNING & DRAFT)'}
@@ -1053,16 +1337,12 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                     </div>
                                                 ) : (
                                                     <div className="mt-2">
+                                                        <p className="text-xs text-red-700 font-bold mb-3 bg-red-50 p-3 rounded-lg border-2 border-red-500 text-left">⚠️ LEGAL LIABILITY NOTICE: By submitting this photograph and signing Part B, the Approver legally certifies an on-site visual inspection of the exposed underground services and assumes full personal, disciplinary, and legal liability under the Health and Safety at Work Act; uploading desk, unrelated, or falsified images constitutes falsification of an official safety record and will result in immediate compliance escalation.</p>
                                                         <button onClick={() => approverCameraRef.current?.click()} disabled={isUploadingApproverPhoto || hasApproverSigned || isClosed || !isOnline} className={`bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-black text-sm uppercase shadow-lg flex items-center justify-center gap-3 w-full transition-all ${!isOnline ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}>
                                                             {isUploadingApproverPhoto ? <Loader2 className="animate-spin" size={20} /> : <Camera size={20} />}
                                                             {isUploadingApproverPhoto ? 'Uploading Securely...' : 'Take Photo'}
                                                         </button>
-                                                        <button onClick={() => approverGalleryRef.current?.click()} disabled={isUploadingApproverPhoto || hasApproverSigned || isClosed || !isOnline} className={`mt-3 bg-white border-2 border-blue-200 text-blue-900 hover:bg-blue-50 px-6 py-4 rounded-xl font-black text-sm uppercase shadow-sm flex items-center justify-center gap-3 w-full transition-all ${!isOnline ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}>
-                                                            {isUploadingApproverPhoto ? <Loader2 className="animate-spin" size={20} /> : <ImageIcon size={20} />}
-                                                            Upload from Gallery
-                                                        </button>
                                                         <input ref={approverCameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleApproverPhotoUpload} />
-                                                        <input ref={approverGalleryRef} type="file" accept="image/*" className="hidden" onChange={handleApproverPhotoUpload} />
                                                         <p className="text-[10px] text-red-600 font-bold mt-3 uppercase tracking-wide bg-red-50 py-1.5 rounded-md border border-red-100 shadow-inner">⚠️ Required before signing</p>
                                                     </div>
                                                 )}
@@ -1072,12 +1352,12 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                 <p className="text-xs font-black text-gray-700 uppercase mb-3 border-b border-gray-100 pb-2 text-center"><ShieldCheck size={14} className="inline mr-1 text-blue-600" /> Step 2: Authorize Works</p>
                                                 {hasApproverSigned ? (
                                                     <div className="text-center bg-white p-6 rounded-xl border-2 border-green-500 shadow-inner">
-                                                        <img src={permit.approverSignature!.data} className="h-16 mx-auto mix-blend-multiply mb-2" alt="sig" />
+                                                        {permit.approverSignature!.type === 'draw' && <img src={permit.approverSignature!.data} className="h-16 mx-auto mix-blend-multiply mb-2" alt="sig" />}
                                                         <p className="font-black uppercase text-gray-900 text-xs">{permit.approverSignature!.name}</p>
                                                         <div className="bg-green-600 text-white px-4 py-3 mt-4 rounded-xl font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg"><ShieldCheck size={20} /> Mechanical Approved</div>
                                                     </div>
                                                 ) : (
-                                                    <SignaturePad label="Approver Name" onSave={handleApproverSign} />
+                                                    <AclSignature users={aclUsers} role="Approver" label="Approver Signature" onSave={handleApproverSign} readOnly={isClosed} />
                                                 )}
                                             </div>
                                         </div>
@@ -1098,7 +1378,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     </div>
                                 )}
                                 <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-inner">
-                                    <table className="min-w-full text-sm"><thead className="bg-gray-100 text-gray-700 uppercase font-black text-[10px] tracking-widest border-b-2 border-gray-200"><tr><th className="p-4 text-left">Date</th><th className="p-4 text-left">Name</th><th className="p-4 text-left">Role</th><th className="p-4 text-center">Signature</th></tr></thead><tbody className="divide-y divide-gray-100">{(permit.crewMembers || []).map(m => (<tr key={m.id} className="hover:bg-gray-50 transition-colors"><td className="p-4 font-mono text-xs text-gray-500">{m.dateInducted ? new Date(m.dateInducted).toLocaleDateString() : 'N/A'}</td><td className="p-4 font-black uppercase text-gray-900">{m.name}</td><td className="p-4 font-bold text-blue-800 text-xs uppercase bg-blue-50 rounded px-2">{m.role}</td><td className="p-4">{m.signature?.data && <img src={m.signature.data} className="h-6 mx-auto mix-blend-multiply" />}</td></tr>))}</tbody></table>
+                                    <table className="min-w-full text-sm"><thead className="bg-gray-100 text-gray-700 uppercase font-black text-[10px] tracking-widest border-b-2 border-gray-200"><tr><th className="p-4 text-left">Date &amp; Time</th><th className="p-4 text-left">Name</th><th className="p-4 text-left">Role</th><th className="p-4 text-center">Signature</th></tr></thead><tbody className="divide-y divide-gray-100">{(permit.crewMembers || []).map(m => (<tr key={m.id} className="hover:bg-gray-50 transition-colors"><td className="p-4 font-mono text-xs text-gray-500">{formatDateTime(m.dateInducted) || 'N/A'}</td><td className="p-4 font-black uppercase text-gray-900">{m.name}</td><td className="p-4 font-bold text-blue-800 text-xs uppercase bg-blue-50 rounded px-2">{m.role}</td><td className="p-4">{m.signature?.data && (m.signature.type === 'type' ? m.signature.name : <img src={m.signature.data} className="h-6 mx-auto mix-blend-multiply" />)}</td></tr>))}</tbody></table>
                                 </div>
                             </div>
 
@@ -1107,16 +1387,15 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     <h3 className="font-black text-xl text-blue-900 uppercase">Daily Sign On</h3>
                                 </div>
                                 {!isClosed && (
-                                    <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 mb-8 grid grid-cols-1 md:grid-cols-4 gap-6">
-                                        <div><label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Date</label><SyncedDateInput className={inputClass} value={dailyDate} onValueChange={v => setDailyDate(v)} /></div>
-                                        <div><SignaturePad label="Receiver Sig" onSave={setDailyRecSig} /></div>
-                                        <div><SignaturePad label="Operator Sig" onSave={setDailyOpSig} /></div>
-                                        <div><SignaturePad label="Spotter Sig" onSave={setDailySpotSig} /></div>
-                                        <div className="md:col-span-4 border-t pt-4"><button type="button" onClick={handleSaveDailyLog} className="w-full bg-blue-800 hover:bg-blue-900 text-white py-4 rounded-xl font-black uppercase shadow-md flex items-center justify-center gap-2"><CheckCircle size={20} /> Save Daily Sign-off</button></div>
+                                    <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div><AclSignature key={`daily-receiver-${(permit.dailyLogs || []).length}`} users={aclUsers} role="Receiver" label="Receiver Signature" onSave={setDailyRecSig} onClear={() => setDailyRecSig(null)} /></div>
+                                        <div><SignaturePad key={`daily-operator-${(permit.dailyLogs || []).length}`} label="Operator Signature" onSave={setDailyOpSig} onClear={() => setDailyOpSig(null)} /></div>
+                                        <div><SignaturePad key={`daily-spotter-${(permit.dailyLogs || []).length}`} label="Spotter Signature" onSave={setDailySpotSig} onClear={() => setDailySpotSig(null)} /></div>
+                                        <div className="md:col-span-3 border-t pt-4"><button type="button" onClick={handleSaveDailyLog} className="w-full bg-blue-800 hover:bg-blue-900 text-white py-4 rounded-xl font-black uppercase shadow-md flex items-center justify-center gap-2"><CheckCircle size={20} /> + Add Sign-On Entry</button></div>
                                     </div>
                                 )}
                                 <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-inner">
-                                    <table className="min-w-full text-xs text-center"><thead className="bg-gray-100 text-gray-700 uppercase font-black tracking-widest"><tr><th className="p-4 border-r">Date</th><th className="p-4 border-r">Receiver</th><th className="p-4 border-r">Operator</th><th className="p-4">Spotter</th></tr></thead><tbody className="divide-y divide-gray-100">{(permit.dailyLogs || []).map(log => (<tr key={log.id} className="hover:bg-gray-50 transition-colors"><td className="p-4 font-mono text-gray-600 border-r">{log.date}</td><td className="p-4 border-r">{log.receiverSig?.data ? <img src={log.receiverSig.data} className="h-8 mx-auto mix-blend-multiply" /> : 'N/A'}</td><td className="p-4 border-r">{log.excavatorSig?.data ? <img src={log.excavatorSig.data} className="h-8 mx-auto mix-blend-multiply" /> : 'N/A'}</td><td className="p-4">{log.spotterSig?.data ? <img src={log.spotterSig.data} className="h-8 mx-auto mix-blend-multiply" /> : 'N/A'}</td></tr>))}</tbody></table>
+                                    <table className="min-w-full text-xs text-center"><thead className="bg-gray-100 text-gray-700 uppercase font-black tracking-widest"><tr><th className="p-4 border-r">Date &amp; Time</th><th className="p-4 border-r">Receiver</th><th className="p-4 border-r">Operator</th><th className="p-4">Spotter</th></tr></thead><tbody className="divide-y divide-gray-100">{(permit.dailyLogs || []).map(log => (<tr key={log.id} className="hover:bg-gray-50 transition-colors"><td className="p-4 font-mono text-gray-600 border-r">{formatDateTime(log.date)}</td>{[log.receiverSig, log.excavatorSig, log.spotterSig].map((sig, index) => <td key={index} className="p-4 border-r">{sig ? <><div>{sig.name}</div>{sig.type === 'draw' && sig.data && <img src={sig.data} className="h-8 mx-auto mix-blend-multiply" alt="Signature" />}</> : 'N/A'}</td>)}</tr>))}</tbody></table>
                                 </div>
                             </div>
 
@@ -1132,16 +1411,13 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 {!isClosed && activeSlotIndex < 7 && allHandoverChecksPassed && (
                                     <div className="bg-blue-50 p-8 rounded-2xl border-2 border-blue-200 shadow-md animate-fade-in relative">
                                         <h4 className="text-sm font-black uppercase mb-6 text-blue-900 flex items-center gap-2 border-b border-blue-200 pb-2"><Users size={20} /> New Receiver Acknowledgement</h4>
-                                        <div className={`grid grid-cols-1 md:grid-cols-2 gap-8 items-end`}>
-                                            <div><label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">New Receiver Full Name</label><DebouncedInput type="text" className={inputClass} value={handoverReceiver} onValueChange={v => setHandoverReceiver(v)} placeholder="Type name here..." /></div>
-                                            <div><SignaturePad key={`handover-${currentHandovers.length}`} label="Sign here" onSave={setHandoverSignature} externalName={handoverReceiver} /></div>
-                                        </div>
+                                        <AclSignature key={`handover-${currentHandovers.length}`} users={aclUsers} role="Receiver" label="New Receiver Signature" onSave={setHandoverSignature} onClear={() => setHandoverSignature(null)} excludeEmail={permit.issuerEmail} />
                                         {handoverSignature && <button onClick={finalizeHandover} className="mt-8 w-full bg-green-600 hover:bg-green-700 text-white font-black uppercase py-4 rounded-xl shadow-lg transition-all flex justify-center items-center gap-2 hover:scale-[1.01]"><ShieldCheck size={20} /> Confirm Handover Registration</button>}
                                     </div>
                                 )}
 
                                 <div className="mt-10"><h4 className="font-black text-sm text-gray-700 uppercase tracking-widest mb-4 border-b pb-2">Handover Log</h4><div className="overflow-x-auto border rounded-xl shadow-inner"><table className="min-w-full text-sm text-center"><thead className="bg-gray-100 text-gray-600 font-bold uppercase text-[10px] tracking-widest"><tr><th className="p-3 border-r">#</th><th className="p-3 border-r text-left">Receiver Name</th><th className="p-3 border-r">Signature</th><th className="p-3">Date</th></tr></thead><tbody className="divide-y divide-gray-100">
-                                    {currentHandovers.map((h, i) => (<tr key={h.id} className="hover:bg-gray-50 transition-colors"><td className="p-3 border-r font-black text-gray-400">{i + 1}</td><td className="p-3 border-r uppercase font-bold text-gray-900 text-left">{h.receiverName}</td><td className="p-3 border-r"><img src={h.signature?.data} className="h-8 mx-auto mix-blend-multiply" /></td><td className="p-3 font-mono text-xs text-gray-500">{h.date ? new Date(h.date).toLocaleString() : 'N/A'}</td></tr>))}
+                                    {currentHandovers.map((h, i) => (<tr key={h.id} className="hover:bg-gray-50 transition-colors"><td className="p-3 border-r font-black text-gray-400">{i + 1}</td><td className="p-3 border-r uppercase font-bold text-gray-900 text-left">{h.receiverName}</td><td className="p-3 border-r">{h.signature?.type === 'type' ? h.signature.name : h.signature?.data && <img src={h.signature.data} className="h-8 mx-auto mix-blend-multiply" alt="Signature" />}</td><td className="p-3 font-mono text-xs text-gray-500">{formatDateTime(h.date) || 'N/A'}</td></tr>))}
                                 </tbody></table></div></div>
                             </div>
 
@@ -1207,18 +1483,29 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                     )}
                                 </div>
                                 <h3 className="font-black text-xl mb-2 text-blue-900 border-b-2 border-blue-200 pb-2 uppercase mt-10">Job Notes</h3>
-                                <DebouncedTextArea className={`${inputClass} mb-4 h-32 text-sm leading-relaxed`} value={otherNotes} onValueChange={v => setOtherNotes(v)} disabled={isClosed || Boolean(permit.otherNotes?.trim())} readOnly={Boolean(permit.otherNotes?.trim())} placeholder="Additional job details, incidents, toolbox meeting notes, or non-conditional comments..."></DebouncedTextArea>
-                                <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900">
-                                    <span className="font-black uppercase">Last updated by:</span>{' '}
-                                    {String((permit as any).notesAuthor || (permit as any).noteAuthor || currentUserDisplayName || 'Unknown user')}
-                                    {' '}<span className="font-black uppercase">on</span>{' '}
+                                <div className="space-y-3 mb-4">
                                     {(() => {
-                                        const rawDate = (permit as any).notesUpdatedAt || (permit as any).noteUpdatedAt || (permit as any).updatedAt || permit.createdAt;
-                                        const parsedDate = rawDate ? new Date(rawDate) : null;
-                                        return parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate.toLocaleString() : 'Date unavailable';
+                                        const history: PermitNote[] = Array.isArray(permit.notesHistory) ? permit.notesHistory : [];
+                                        const legacyText = String(permit.otherNotes || '').trim();
+                                        const entries: PermitNote[] = history.length > 0 ? history : (legacyText ? [{ text: legacyText, author: String((permit as any).notesAuthor || ''), timestamp: String((permit as any).notesUpdatedAt || permit.createdAt || '') }] : []);
+                                        if (entries.length === 0) return <p className="text-xs font-bold text-gray-400 uppercase">No notes yet.</p>;
+                                        return entries.map((n, i) => {
+                                            const d = n?.timestamp ? new Date(n.timestamp) : null;
+                                            return (
+                                                <div key={`${n?.timestamp || 'note'}-${i}`} className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+                                                    <div className="text-[11px] text-blue-900 font-black uppercase mb-1">{String(n?.author || 'Unknown user')} · {d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : 'Date unavailable'}</div>
+                                                    <p className="text-sm text-gray-900 whitespace-pre-wrap leading-relaxed">{String(n?.text || '')}</p>
+                                                </div>
+                                            );
+                                        });
                                     })()}
                                 </div>
-                                {!isClosed && !permit.otherNotes?.trim() && otherNotes.trim() && <button onClick={() => { const notesUpdatedAt = new Date().toISOString(); syncQuietly({ ...permit, otherNotes, notesAuthor: currentUserDisplayName, notesUpdatedAt } as Permit); alert("Notes saved successfully."); }} className="bg-blue-800 hover:bg-blue-900 text-white px-8 py-3 rounded-xl font-black text-xs uppercase shadow-md transition-all hover:scale-[1.02]">Save Notes</button>}
+                                {!isClosed && (
+                                    <>
+                                        <textarea className={`${inputClass} mb-4 h-24 text-sm leading-relaxed`} value={noteDraft} onChange={e => setNoteDraft(e.target.value)} disabled={isSavingNote} placeholder="Add a note (job details, incidents, toolbox meeting notes...). Submitted notes cannot be edited."></textarea>
+                                        <button type="button" onClick={handleAddNote} disabled={isSavingNote || !noteDraft.trim()} className={`px-8 py-3 rounded-xl font-black text-xs uppercase shadow-md transition-all ${isSavingNote || !noteDraft.trim() ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-800 hover:bg-blue-900 text-white hover:scale-[1.02]'}`}>{isSavingNote ? 'Saving...' : 'Add Note'}</button>
+                                    </>
+                                )}
                             </div>
 
                             <div className={activeTab === 'closure' ? 'block animate-fade-in' : 'hidden'}>
@@ -1238,12 +1525,14 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                 <div className="flex flex-col gap-3 p-3 border rounded-xl hover:bg-gray-50 transition-colors relative"><label className="flex items-start gap-4 cursor-pointer group"><input type="checkbox" checked={preClosureCheck3} onChange={e => { setPreClosureCheck3(e.target.checked); if (e.target.checked) setPreClosureCheck1(false); }} className="mt-1 h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer" /><span className="text-sm font-bold text-gray-800 leading-relaxed">The work has not been completed and the following remains outstanding:</span></label>{preClosureCheck3 && (<DebouncedTextArea className="ml-9 text-sm border-2 border-blue-200 rounded-lg p-3 bg-white focus:ring-2 outline-none animate-in fade-in" rows={3} placeholder="Please detail outstanding works..." value={outstandingWorks} onValueChange={v => setOutstandingWorks(v)} />)}</div>
                                             </div>
                                             <div className="border-t-2 border-gray-100 pt-8">
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                                {(!hasDigitalDaily || !hasDigitalCrew) && (
+                                                <div className="mb-6">
                                                     <div className="border-2 border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50">
-                                                        <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">Daily Sign Off Evidence *</p>
-                                                        {permit.dailySignOffUrl ? (
-                                                            <div className="space-y-2">
-                                                                <img src={permit.dailySignOffUrl} alt="Daily sign off evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
+                                                        <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">DAILY SIGN OFF & CREW REGISTRATION EVIDENCE *</p>
+                                                        {(permit.dailySignOffUrl || permit.crewRegistrationUrl) ? (
+                                                            <div className="space-y-2 relative">
+                                                                <img src={permit.dailySignOffUrl || permit.crewRegistrationUrl} alt="Daily sign off and crew registration evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
+                                                                <button type="button" onClick={() => handleClosureEvidenceDelete()} disabled={isSubmitting || !isOnline} aria-label="Delete evidence photo" title="Delete photo" className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full shadow-md hover:bg-red-700 disabled:bg-gray-400"><Trash2 size={16} /></button>
                                                             </div>
                                                         ) : (
                                                             <div className="space-y-2">
@@ -1251,38 +1540,28 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                                                 <button onClick={() => dailySignOffGalleryRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'} font-black uppercase text-xs py-3 rounded-xl`}><ImageIcon size={14} className="inline mr-2" />Upload from Gallery</button>
                                                             </div>
                                                         )}
-                                                        <input ref={dailySignOffUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'dailySignOffUrl')} />
-                                                        <input ref={dailySignOffGalleryRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'dailySignOffUrl')} />
-                                                    </div>
-
-                                                    <div className="border-2 border-dashed border-gray-300 rounded-2xl p-4 bg-gray-50">
-                                                        <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">Crew Registration Evidence *</p>
-                                                        {permit.crewRegistrationUrl ? (
-                                                            <div className="space-y-2">
-                                                                <img src={permit.crewRegistrationUrl} alt="Crew registration evidence" className="h-28 w-full object-cover rounded-xl border border-gray-200" />
-                                                            </div>
-                                                        ) : (
-                                                            <div className="space-y-2">
-                                                                <button onClick={() => crewRegistrationUploadRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'} font-black uppercase text-xs py-3 rounded-xl`}><Camera size={14} className="inline mr-2" />Take Photo</button>
-                                                                <button onClick={() => crewRegistrationGalleryRef.current?.click()} disabled={!isOnline} className={`w-full ${!isOnline ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'} font-black uppercase text-xs py-3 rounded-xl`}><ImageIcon size={14} className="inline mr-2" />Upload from Gallery</button>
-                                                            </div>
-                                                        )}
-                                                        <input ref={crewRegistrationUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'crewRegistrationUrl')} />
-                                                        <input ref={crewRegistrationGalleryRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleClosureEvidenceUpload(e, 'crewRegistrationUrl')} />
+                                                        <input ref={dailySignOffUploadRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleClosureEvidenceUpload} />
+                                                        <input ref={dailySignOffGalleryRef} type="file" accept="image/*" className="hidden" onChange={handleClosureEvidenceUpload} />
                                                     </div>
                                                 </div>
+                                                )}
 
-                                                <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">Identify to Close (Type Full Name of Active Receiver)</label>
-                                                <DebouncedInput type="text" className={inputClass + " mb-6 py-3 text-lg text-center uppercase border-gray-400"} placeholder={currentReceiverName} value={closureReceiverName} onValueChange={v => setClosureReceiverName(v)} />
+                                                <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">Identify to Close (Active Receiver)</label>
+                                                <DebouncedInput type="text" className={inputClass + " mb-6 py-3 text-lg text-center uppercase border-gray-400"} placeholder={activeReceiverName.toUpperCase()} value={closureReceiverName} onValueChange={v => setClosureReceiverName(v)} />
 
+                                                {isClosureDeniedByHandover && (
+                                                    <div className="bg-red-100 border border-red-300 text-red-800 p-3 rounded-lg mb-4 text-xs font-bold flex items-center justify-center gap-2 text-center shadow-inner">
+                                                        <AlertTriangle size={16} className="shrink-0" /> {aclError || HANDOVER_CLOSURE_DENIED_MESSAGE}
+                                                    </div>
+                                                )}
                                                 {!isOnline && (
                                                     <div className="bg-red-100 text-red-800 p-3 rounded-lg mb-4 text-xs font-bold flex items-center justify-center gap-2 text-center shadow-inner">
                                                         <Wifi size={16} className="shrink-0" /> INTERNET REQUIRED: You cannot close the permit offline because the final 12-page PDF must be uploaded directly to the cloud.
                                                     </div>
                                                 )}
-                                                <button onClick={handleAutomatedCloseAndLodge} disabled={isSubmitting || !isOnline || !permit.dailySignOffUrl || !permit.crewRegistrationUrl} className={`w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting || !isOnline || !permit.dailySignOffUrl || !permit.crewRegistrationUrl ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed' : 'bg-red-600 text-white shadow-xl hover:bg-red-700 hover:scale-[1.02] active:scale-[0.98]'}`}>
+                                                <button onTouchStart={(e) => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onClick={handleAutomatedCloseAndLodge} disabled={isSubmitting || !isOnline || isClosureDeniedByHandover || !isRegistrationEvidenceReady} className={`w-full py-5 rounded-xl font-black text-lg uppercase flex items-center justify-center gap-3 transition-all ${isSubmitting || !isOnline || isClosureDeniedByHandover || !isRegistrationEvidenceReady ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed' : 'bg-red-600 text-white shadow-xl hover:bg-red-700 hover:scale-[1.02] active:scale-[0.98]'}`}>
                                                     {isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <CloudUpload size={28} />}
-                                                    {isSubmitting ? 'Generating PDF & Syncing...' : 'Close Permit & Finalize'}
+                                                    {isSubmitting ? 'Processing...' : 'Close Permit & Finalize'}
                                                 </button>
                                             </div>
                                         </div>
@@ -1296,7 +1575,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                     {isPreparingPDF && <div className="absolute -left-[10000px] top-0 print:static print:left-0 w-[210mm] print:w-[210mm] z-[-50] print:z-auto">
                         <div ref={pdfExportRef} className="bg-white">
-                            <PermitPDFLayout permit={permit} pdfRef={pdfExportRef} currentReceiverName={currentReceiverName} currentReceiverSignature={currentReceiverSignature} partAItems={partAItems} partBItems={partBItems} receiverItems={receiverItems} handoverItems={handoverItems} currentHandovers={currentHandovers} CEASE_WORKS_ITEMS={[
+                                                    <PermitPDFLayout permit={pdfPermit || permit} pdfRef={pdfExportRef} currentReceiverName={currentReceiverName} currentReceiverSignature={currentReceiverSignature} partAItems={partAItems} partBItems={partBItems} receiverItems={receiverItems} handoverItems={handoverItems} currentHandovers={currentHandovers} CEASE_WORKS_ITEMS={[
                                 { id: '1', text: "If you encounter a previously unidentified service or archaeological items, work must stop..." },
                                 { id: '2', text: "If the methodology or site conditions change, work must stop..." },
                                 { id: '3', text: "If the foreman, excavator operator or spotter change at any stage, work must stop..." },
@@ -1307,7 +1586,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
 
                     {/* Local print only: print-only permit in normal document flow; no fixed/absolute/overflow clipping. Separate from the Cx PDF layout above */}
                     {isPrintMounted && <div className="hidden print:block print-area">
-                        <PermitPDFLayout permit={permit} pdfRef={printLayoutRef} currentReceiverName={currentReceiverName} currentReceiverSignature={currentReceiverSignature} partAItems={partAItems} partBItems={partBItems} receiverItems={receiverItems} handoverItems={handoverItems} currentHandovers={currentHandovers} CEASE_WORKS_ITEMS={[
+                        <PermitPDFLayout permit={permit} pdfRef={printLayoutRef} auditUrl={permit.id ? buildAuditPdfUrl(permit.id) : undefined} currentReceiverName={currentReceiverName} currentReceiverSignature={currentReceiverSignature} partAItems={partAItems} partBItems={partBItems} receiverItems={receiverItems} handoverItems={handoverItems} currentHandovers={currentHandovers} CEASE_WORKS_ITEMS={[
                             { id: '1', text: "If you encounter a previously unidentified service or archaeological items, work must stop..." },
                             { id: '2', text: "If the methodology or site conditions change, work must stop..." },
                             { id: '3', text: "If the foreman, excavator operator or spotter change at any stage, work must stop..." },

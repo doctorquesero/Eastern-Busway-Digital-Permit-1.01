@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    arrayRemove,
     collection,
     deleteDoc,
     doc,
     getDoc,
     getDocs,
     onSnapshot,
+    runTransaction,
     serverTimestamp,
     setDoc,
     updateDoc,
@@ -33,13 +33,14 @@ import {
     Users,
     X,
 } from "lucide-react";
-import { db } from "../firebase";
+import { auth, db } from "../firebase";
 import { getCurrentUserEmail } from "../services/cx";
 import { ModeToggle } from "../components/ModeToggle";
 import { AutoSyncToggle } from "../components/AutoSyncToggle";
 import { getTargetCollection } from "../utils/appMode";
 import { sanitizeForFirestore } from "../utils/firestore";
 import { getNamePartsFromEmail } from "../utils/userNames";
+import { ChangePinForm } from "../components/ChangePinForm";
 
 type Role = "Master" | "Issuer" | "Receiver" | "Approver" | "Site Engineer";
 
@@ -50,6 +51,7 @@ interface UserAssignment {
     firstName?: string;
     lastName?: string;
     phone?: string;
+    pin?: string;
     [key: string]: unknown;
 }
 
@@ -131,9 +133,7 @@ export const Settings: React.FC = () => {
     const retryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
     const currentUser = String(getCurrentUserEmail() || "").toLowerCase();
-    const isMaster =
-        currentUser.includes("dietrich") ||
-        currentUser.includes("eba-dt");
+    const isMaster = currentUser.trim() === "dietrich.truchsess@easternbusway.nz";
     const filteredSortedUsers = settings.roleAssignments
         .map((user, index) => ({ user, index }))
         .filter(({ user }) => {
@@ -235,11 +235,51 @@ export const Settings: React.FC = () => {
     }, [userSearch, columnFilters]);
 
     const persistSettings = async (nextSettings: AppSettings) => {
-        await setDoc(
-            doc(db, "appSettings", "global"),
-            sanitizeForFirestore(nextSettings),
-        );
-        setSettings(nextSettings);
+        const settingsRef = doc(db, "appSettings", "global");
+        const saved = await runTransaction(db, async transaction => {
+            const snapshot = await transaction.get(settingsRef);
+            const currentUsers = snapshot.data()?.roleAssignments;
+            if (!Array.isArray(currentUsers)) throw new Error("ACL directory is unavailable.");
+            const roleAssignments = nextSettings.roleAssignments.map(user => {
+                const current = currentUsers.find((item: UserAssignment) => String(item.email || "").trim().toLowerCase() === String(user.email || "").trim().toLowerCase());
+                if (!current) return user;
+                const updated = { ...user };
+                delete updated.pin;
+                if (current.pin !== undefined) updated.pin = current.pin;
+                return updated;
+            });
+            const updated = { ...nextSettings, roleAssignments };
+            transaction.set(settingsRef, sanitizeForFirestore(updated));
+            return updated;
+        });
+        setSettings(saved);
+    };
+
+    const resetPin = async (email: string) => {
+        setIsSaving(true);
+        try {
+            const settingsRef = doc(db, "appSettings", "global");
+            const updated = await runTransaction(db, async transaction => {
+                const snapshot = await transaction.get(settingsRef);
+                const users = snapshot.data()?.roleAssignments;
+                if (!Array.isArray(users)) throw new Error("ACL directory is unavailable.");
+                const index = users.findIndex((user: UserAssignment) => String(user.email || "").trim().toLowerCase() === email);
+                if (index < 0) throw new Error("ACL user not found.");
+                if (!isMaster) throw new Error("Only the Master can reset a PIN.");
+                if (String(users[index].phone || "").replace(/\D/g, "").length < 4) throw new Error("The user's phone number must have at least four digits before resetting the PIN.");
+                const updatedUser = { ...users[index] };
+                delete updatedUser.pin;
+                const nextUsers = users.map((user: UserAssignment, i: number) => i === index ? updatedUser : user);
+                transaction.update(settingsRef, { roleAssignments: nextUsers });
+                return nextUsers as UserAssignment[];
+            });
+            setSettings(previous => ({ ...previous, roleAssignments: updated }));
+            alert("PIN reset to phone last 4.");
+        } catch (error) {
+            alert(error instanceof Error ? error.message : "Unable to reset PIN.");
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleSave = async () => {
@@ -436,15 +476,26 @@ export const Settings: React.FC = () => {
             alert("Safety Lock: You cannot remove the primary Master account.");
             return;
         }
+        const email = String(user.email || "").trim().toLowerCase();
+        if (!email) {
+            alert("Cannot remove a user without an email address.");
+            return;
+        }
         try {
-            await updateDoc(doc(db, "appSettings", "global"), {
-                roleAssignments: arrayRemove(user),
+            const settingsRef = doc(db, "appSettings", "global");
+            const users = await runTransaction(db, async transaction => {
+                const snapshot = await transaction.get(settingsRef);
+                const assignments = snapshot.data()?.roleAssignments;
+                if (!Array.isArray(assignments)) throw new Error("ACL directory is unavailable.");
+                const matches = assignments.filter((item: UserAssignment) => String(item.email || "").trim().toLowerCase() === email);
+                if (matches.length !== 1) throw new Error("ACL user is missing or duplicated.");
+                const updated = assignments.filter((item: UserAssignment) => String(item.email || "").trim().toLowerCase() !== email);
+                transaction.update(settingsRef, { roleAssignments: updated });
+                return updated as UserAssignment[];
             });
             setSettings((previous) => ({
                 ...previous,
-                roleAssignments: previous.roleAssignments.filter(
-                    (item) => item !== user,
-                ),
+                roleAssignments: users,
             }));
             if (editingUserIndex === index) {
                 setEditingUser(null);
@@ -530,6 +581,9 @@ export const Settings: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 gap-8">
+                    <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+                        <ChangePinForm currentEmail={auth.currentUser?.email || currentUser} />
+                    </div>
                     <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
                         <div>
                             <h2 className="text-xl font-bold text-gray-800 mb-2 flex items-center gap-2">
@@ -708,6 +762,7 @@ export const Settings: React.FC = () => {
                                             <th className="p-4">Last Name</th>
                                             <th className="p-4">Email</th>
                                             <th className="p-4">Phone</th>
+                                            <th className="p-4">PIN</th>
                                             <th className="p-4 relative">
                                                 <div className="flex items-center gap-2">Roles<button onClick={() => setActiveFilterMenu(activeFilterMenu === "roles" ? null : "roles")} className={`p-1 rounded ${columnFilters.roles.length > 0 ? "bg-blue-100 text-blue-700" : "text-gray-400 hover:bg-gray-200"}`}><Filter size={14} className={columnFilters.roles.length > 0 ? "fill-current" : ""} /></button></div>
                                                 {activeFilterMenu === "roles" && <div className="absolute left-4 top-12 w-56 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 normal-case tracking-normal text-gray-900"><div className="p-2 border-b bg-gray-50 flex items-center justify-between text-xs font-bold"><span>Filter Roles</span><button onClick={() => setActiveFilterMenu(null)}><X size={14} /></button></div><div className="p-1">{ROLE_OPTIONS.map((role) => <label key={role} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">{columnFilters.roles.includes(role) ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} className="text-gray-300" />}{role}<input type="checkbox" className="hidden" checked={columnFilters.roles.includes(role)} onChange={() => toggleFilterOption("roles", role)} /></label>)}</div><div className="p-2 border-t"><button onClick={() => { setColumnFilters({ roles: [] }); setActiveFilterMenu(null); }} className="w-full py-1.5 text-xs font-bold text-gray-600 bg-gray-100 rounded">Clear Filter</button></div></div>}
@@ -770,6 +825,7 @@ export const Settings: React.FC = () => {
                                                             className="w-full border rounded px-2 py-2"
                                                         />
                                                     </td>
+                                                    <td className="p-2">••••</td>
                                                     <td className="p-2">
                                                         <div className="grid grid-cols-2 gap-2">
                                                             {ROLE_OPTIONS.map((role) => (
@@ -818,6 +874,7 @@ export const Settings: React.FC = () => {
                                                         {user.email || "N/A"}
                                                     </td>
                                                     <td className="p-4">{user.phone || "N/A"}</td>
+                                                    <td className="p-4">••••</td>
                                                     <td className="p-4">
                                                         {roles.length ? roles.join(", ") : "N/A"}
                                                     </td>
@@ -834,6 +891,7 @@ export const Settings: React.FC = () => {
                                                         >
                                                             <Trash2 size={16} />
                                                         </button>
+                                                        <button type="button" disabled={isSaving} onClick={() => { if (user.email && confirm(`Reset PIN for ${name.firstName} ${name.lastName} to phone last 4?`)) void resetPin(user.email.trim().toLowerCase()); }} className="text-blue-700 text-xs font-bold block mx-auto">Reset PIN to Phone Last 4</button>
                                                     </td>
                                                 </tr>
                                             );

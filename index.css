@@ -1,6 +1,10 @@
 /* ========================================================= */
 /* MOTOR PDF: FORMATO A4 ESTRICTO (CERO PÁGINAS EN BLANCO)   */
 /* ========================================================= */
+html, body {
+  overscroll-behavior-y: none;
+}
+
 input,
 textarea,
 [contenteditable] {

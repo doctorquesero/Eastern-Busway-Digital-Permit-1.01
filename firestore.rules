@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Metrics & Performance: signed-in users read the summary and its node shards.
+    // NOTE: rules are OR-ed, so the wildcard below still grants everything; this block documents intent
+    // and keeps the analytics read explicit if the wildcard is ever tightened.
+    match /analytics/{docId} {
+      allow read: if request.auth != null && (docId == 'latest_summary' || docId.matches('latest_summary_nodes_[0-9]+'));
+    }
+
+    // Existing live rule, unchanged.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

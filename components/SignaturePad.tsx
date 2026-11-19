@@ -7,18 +7,24 @@ import { getDisplayNameFromEmail } from '../utils/userNames';
 
 interface SignaturePadProps {
   label: string;
-  onSave: (sig: Signature) => void;
+  onSave: (sig: Signature) => void | boolean | Promise<void | boolean>;
   initialValue?: Signature;
   externalName?: string; // New prop to sync name from external inputs
   readOnly?: boolean; // When true, locks the signature (no clearing, no re-signing)
+  fixedName?: boolean;
+  beforeSave?: () => boolean;
+  onClear?: () => void;
 }
 
-const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue, externalName, readOnly = false }) => {
+const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue, externalName, readOnly = false, fixedName = false, beforeSave, onClear }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [mode, setMode] = useState<SignatureType>('draw');
   const [signerName, setSignerName] = useState('');
   const [hasSignature, setHasSignature] = useState(false);
+  const [signatureData, setSignatureData] = useState('');
+  const [hasInk, setHasInk] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const displaySignerName = (name?: string) => name?.includes('@') ? getDisplayNameFromEmail(name) : name || '';
 
   useEffect(() => {
@@ -26,6 +32,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
       setMode(initialValue.type);
       setSignerName(displaySignerName(initialValue.name));
       setHasSignature(true);
+      setSignatureData(initialValue.data);
     }
   }, [initialValue]);
 
@@ -90,6 +97,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
     const coords = getCoords(e);
     ctx.lineTo(coords.x, coords.y);
     ctx.stroke();
+    setHasInk(true);
   };
 
   const stopDrawing = () => {
@@ -103,34 +111,51 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
       ctx?.clearRect(0, 0, canvas.width, canvas.height);
     }
     setHasSignature(false);
+    setHasInk(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (isSaving) return;
+    if (beforeSave && !beforeSave()) return;
     if (!signerName.trim()) {
       alert("Please enter your name.");
       return;
     }
 
+    let signature: Signature;
     if (mode === 'draw') {
+      if (!hasInk) {
+        alert("Please draw your signature.");
+        return;
+      }
       const canvas = canvasRef.current;
       if (canvas) {
         const dataUrl = canvas.toDataURL();
-        onSave({
+        signature = {
           type: 'draw',
           data: dataUrl,
           name: signerName,
           date: new Date().toISOString()
-        });
-        setHasSignature(true);
-      }
+        };
+      } else return;
     } else {
-      onSave({
+      signature = {
         type: 'type',
         data: signerName,
         name: signerName,
         date: new Date().toISOString()
-      });
+      };
+    }
+    setIsSaving(true);
+    try {
+      if (await onSave(signature) === false) return;
+      setSignatureData(signature.data);
       setHasSignature(true);
+    } catch (error) {
+      console.error('Unable to save signature:', error);
+      alert('Unable to save the signature. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -170,10 +195,10 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
           {mode === 'type' ? (
             <p className="text-lg font-script mt-2 italic">{signerName}</p>
           ) : (
-            <img src={initialValue?.data || ''} alt="Signature" className="h-16 mx-auto mt-2" />
+            <img src={signatureData} alt="Signature" className="h-16 mx-auto mt-2" />
           )}
           {!readOnly && (
-            <button onClick={() => { setHasSignature(false); clear(); }} className="mt-2 text-xs text-red-500 font-bold underline no-print">Clear / Re-sign</button>
+            <button onClick={() => { setHasSignature(false); clear(); onClear?.(); }} className="mt-2 text-xs text-red-500 font-bold underline no-print">Clear / Re-sign</button>
           )}
         </div>
       ) : readOnly ? (
@@ -187,6 +212,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
               type="text"
               value={signerName}
               onChange={(e) => setSignerName(e.target.value)}
+              readOnly={fixedName}
               placeholder="Enter your full name"
               className={inputClass}
             />
@@ -224,6 +250,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ label, onSave, initialValue
             <button
               type="button"
               onClick={handleSave}
+              disabled={isSaving}
               className="px-4 py-1 text-sm bg-brand-600 text-white font-bold rounded hover:bg-brand-700 shadow-sm transition-colors"
             >
               Confirm Signature

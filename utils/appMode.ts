@@ -1,5 +1,21 @@
 // src/utils/appMode.ts
 
+// Deep links (e.g. emailed "Close permit" links) may carry ?mode=live|demo; apply it before any mode read.
+if (typeof window !== 'undefined') {
+    try {
+        const requested = new URLSearchParams(window.location.search).get('mode')?.toUpperCase();
+        if (requested === 'LIVE' || requested === 'DEMO') {
+            localStorage.setItem('eba_app_mode', requested);
+            const params = new URLSearchParams(window.location.search);
+            params.delete('mode');
+            const query = params.toString();
+            window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+        }
+    } catch {
+        // storage unavailable: fall through to the default mode
+    }
+}
+
 export const getAppMode = (): 'LIVE' | 'DEMO' => {
     const storedMode = localStorage.getItem('eba_app_mode') as 'LIVE' | 'DEMO' | null;
     if (storedMode === 'LIVE' || storedMode === 'DEMO') return storedMode;

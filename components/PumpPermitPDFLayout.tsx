@@ -7,7 +7,18 @@ interface PumpPermitPDFLayoutProps {
 
 const PumpPermitPDFLayout: React.FC<PumpPermitPDFLayoutProps> = ({ permit }) => {
     return (
-        <div className="bg-white p-8 w-[800px] mx-auto text-black font-sans text-sm pb-16">
+        <div className="pump-pdf bg-white p-8 w-[800px] mx-auto text-black font-sans text-sm pb-16">
+            <style>
+                {`
+                /* Ink-saver: photos (img) are untouched and stay in full color. */
+                .pump-pdf [class*="bg-blue"], .pump-pdf [class*="bg-gray"], .pump-pdf [class*="bg-green"] {
+                    background-color: #ffffff !important;
+                    color: #000000 !important;
+                }
+                .pump-pdf h2[class*="bg-blue"] { border-bottom: 2px solid #000000; }
+                .pump-pdf .text-white, .pump-pdf [class*="text-blue"], .pump-pdf [class*="text-gray-8"] { color: #000000 !important; }
+                `}
+            </style>
             {/* HEADER */}
             <div className="flex justify-between items-start border-b-4 border-blue-900 pb-4 mb-6">
                 <div>

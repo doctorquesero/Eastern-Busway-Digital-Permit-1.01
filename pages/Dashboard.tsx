@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, doc, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, getDocsFromServer, onSnapshot, doc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, Square, Search, X, CloudOff, Plus, ChevronRight, Download } from 'lucide-react';
 import { getCurrentUserEmail, getCircuitBreakerRemainingTime } from '../services/cx';
+import { getNamePartsFromEmail } from '../utils/userNames';
 import { getAppMode, getTargetCollection } from '../utils/appMode';
 
 // 🚀 DICCIONARIO OFICIAL ALINEADO CON iTwoCX
@@ -26,6 +27,14 @@ const permitCategories = [
   { code: 'USW2', name: 'Utility Services L2', icon: '⚡', color: 'bg-pink-50 text-pink-400', border: 'border-pink-100' },
 ];
 
+interface DirectoryUser { email: string; fullName: string; roles: string[] }
+const cleanEmail = (v: unknown): string => {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
+};
+const normName = (v: unknown): string =>
+  String(v ?? '').toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim();
+
 const MASTER_SECURITY_PIN = "CX-Master-2026";
 const COLUMN_FILTERS_STORAGE_KEY = 'eba_dashboard_column_filters';
 const COLUMNS_STORAGE_KEY = 'eba_dashboard_columns';
@@ -41,8 +50,17 @@ const ALL_COLUMNS = [
   { id: 'receiver', label: 'Receiver', alwaysVisible: false },
   { id: 'issuer', label: 'Issuer', alwaysVisible: false },
   { id: 'approver', label: 'Approver', alwaysVisible: false },
+  { id: 'issuedDate', label: 'Permit Issued Date', alwaysVisible: false },
+  { id: 'commencementDate', label: 'Commencement Date', alwaysVisible: false },
+  { id: 'endDate', label: 'Expiry Date', alwaysVisible: false },
   { id: 'action', label: 'Action', alwaysVisible: true }
 ];
+
+const formatDateCell = (value: unknown): string => {
+  if (!value) return '';
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleDateString();
+};
 
 export const Dashboard = () => {
   const navigate = useNavigate();
@@ -88,8 +106,31 @@ export const Dashboard = () => {
     }
   });
 
+  const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
+
+  // Registered users managed in Settings (appSettings/global.roleAssignments).
   useEffect(() => {
-    const hasActiveFilters = Object.values(columnFilters).some((values: string[]) => values.length > 0);
+    return onSnapshot(doc(db, 'appSettings', 'global'), snap => {
+      const list: any[] = snap.exists() && Array.isArray(snap.data()?.roleAssignments) ? snap.data()!.roleAssignments : [];
+      const byEmail = new Map<string, DirectoryUser>();
+      list.forEach(u => {
+        const email = cleanEmail(u?.email);
+        if (!email) return;
+        const fallback = getNamePartsFromEmail(email);
+        const fullName = `${u.firstName || fallback.firstName || ''} ${u.lastName || fallback.lastName || ''}`.trim() || email;
+        const raw = Array.isArray(u.roles) ? u.roles : String(u.roles || u.role || '').split(',');
+        const roles = raw.map((r: unknown) => String(r).toLowerCase().replace(/[^a-z]/g, '')).filter(Boolean);
+        const prev = byEmail.get(email);
+        byEmail.set(email, { email, fullName: prev?.fullName || fullName, roles: [...new Set([...(prev?.roles || []), ...roles])] });
+      });
+      setDirectoryUsers([...byEmail.values()]);
+      setDirectoryLoaded(true);
+    }, err => console.error('Failed to load user directory', err));
+  }, []);
+
+  useEffect(() => {
+    const hasActiveFilters =  Object.values(columnFilters).some((values: string[]) => values.length > 0);
     if (hasActiveFilters) {
       localStorage.setItem(COLUMN_FILTERS_STORAGE_KEY, JSON.stringify(columnFilters));
     } else {
@@ -106,49 +147,54 @@ export const Dashboard = () => {
     else localStorage.removeItem(SEARCH_STORAGE_KEY);
   }, [searchQuery]);
 
+  const sortByCreatedDesc = (arr: any[]) =>
+    arr.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+  const applySnapshot = (querySnapshot: any) => {
+    const permitsFromCloud: any[] = [];
+    querySnapshot.forEach((docSnap: any) => {
+      permitsFromCloud.push({ id: docSnap.id, ...docSnap.data() });
+    });
+    setSavedPermits(sortByCreatedDesc(permitsFromCloud));
+  };
+
+  // Manual refresh: always hits the server, never a local cache or a stale localStorage copy.
   const loadPermits = async () => {
     setIsSyncing(true);
     try {
-      // Force fresh fetch by disabling cache
       const q = query(collection(db, getTargetCollection()), where('env', '==', getAppMode()));
-      const querySnapshot = await getDocs(q, { source: 'server' });
-      const permitsFromCloud: any[] = [];
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        permitsFromCloud.push({ id: docSnap.id, ...data });
-      });
-
-      permitsFromCloud.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-      setSavedPermits(permitsFromCloud);
-      localStorage.setItem('eba_permits_db_v3', JSON.stringify(permitsFromCloud));
+      applySnapshot(await getDocsFromServer(q));
     } catch (error) {
-      console.warn("Failed to fetch fresh data from server, falling back to cache:", error);
-      const rawData = localStorage.getItem('eba_permits_db_v3');
-      if (rawData) {
-        try {
-          const parsed = JSON.parse(rawData);
-          const arr = Array.isArray(parsed) ? parsed : Object.values(parsed);
-          arr.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-          setSavedPermits(arr);
-        } catch (parseErr) {
-          console.error("Failed to parse cached data:", parseErr);
-        }
-      }
+      console.error("Failed to fetch permits from server:", error);
     } finally {
       setIsSyncing(false);
     }
   };
 
   useEffect(() => {
-    // Small delay to ensure Firebase connection is established
-    const initialLoadTimer = setTimeout(() => {
-      loadPermits();
-    }, 100);
-    
+    // Drop the legacy cached permit list so it can never resurface as stale data.
+    localStorage.removeItem('eba_permits_db_v3');
+
+    setIsSyncing(true);
+    const q = query(collection(db, getTargetCollection()), where('env', '==', appMode));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        applySnapshot(snapshot);
+        setIsSyncing(false);
+      },
+      (error) => {
+        console.error("Permit listener error:", error);
+        setIsSyncing(false);
+      }
+    );
+    return () => unsubscribe();
+  }, [appMode]);
+
+  useEffect(() => {
     const cbInterval = setInterval(() => {
       setCbTimeLeft(getCircuitBreakerRemainingTime());
     }, 1000);
-    const interval = setInterval(loadPermits, 15000);
 
     // 🚀 RADAR: Revisa el modo de la app cada medio segundo
     const modeRadar = setInterval(() => {
@@ -156,9 +202,7 @@ export const Dashboard = () => {
     }, 500);
 
     return () => {
-      clearTimeout(initialLoadTimer);
       clearInterval(cbInterval);
-      clearInterval(interval);
       clearInterval(modeRadar);
     };
   }, []);
@@ -192,18 +236,77 @@ export const Dashboard = () => {
     }
   };
 
+  const directoryByRole = useMemo(() => {
+    const result: Record<'receiver' | 'issuer' | 'approver' | 'engineer', DirectoryUser[]> = { receiver: [], issuer: [], approver: [], engineer: [] };
+    directoryUsers.forEach(u => {
+      if (u.roles.includes('receiver')) result.receiver.push(u);
+      if (u.roles.includes('issuer')) result.issuer.push(u);
+      if (u.roles.includes('approver')) result.approver.push(u);
+      if (u.roles.includes('siteengineer')) result.engineer.push(u);
+    });
+    return result;
+  }, [directoryUsers]);
+
+  const directoryEmails = useMemo(() => new Set(directoryUsers.map(u => u.email)), [directoryUsers]);
+
+  // Email is the key. A typed name is only a fallback (issuer/approver signatures store no email) and must match exactly one registered user.
+  const resolveDirectoryEmail = (email: unknown, typedName: unknown, candidates: DirectoryUser[] = directoryUsers): string => {
+    const e = cleanEmail(email);
+    if (e) return directoryEmails.has(e) ? e : '';
+    const want = normName(typedName).split(' ').filter(Boolean);
+    if (want.length === 0) return '';
+    const matches = candidates.filter(u => {
+      const tokens = normName(u.fullName).split(' ').filter(Boolean);
+      return want.every(w => tokens.some(t => t.startsWith(w)));
+    });
+    return matches.length === 1 ? matches[0].email : '';
+  };
+
+  const permitPersonEmail = (p: any, role: 'receiver' | 'issuer' | 'approver' | 'engineer'): string => {
+    const candidates = directoryByRole[role];
+    if (role === 'engineer') return resolveDirectoryEmail(p.siteEngineerEmail || p.engineerEmail, p.siteEngineerSignature?.name, candidates);
+    if (role === 'receiver') {
+      const logs: any[] = Array.isArray(p.handoverLogs) ? p.handoverLogs : [];
+      const last = logs.length ? logs[logs.length - 1] : null;
+      return last
+        ? resolveDirectoryEmail(last.receiverEmail, last.receiverName, candidates)
+        : resolveDirectoryEmail(p.receiverEmail || (cleanEmail(p.receiver) ? p.receiver : ''), p.receiverSignature?.name || p.receiverName, candidates);
+    }
+    if (role === 'issuer') return resolveDirectoryEmail(p.issuerEmail, p.issuerSignature?.name, candidates);
+    return resolveDirectoryEmail(p.approverEmail, p.approverSignature?.name, candidates);
+  };
+
+  const personLabel = (email: string) => directoryUsers.find(u => u.email === email)?.fullName || email;
+  const filterLabel = (colId: string, value: string) => (colId === 'receiver' || colId === 'issuer' || colId === 'approver' || colId === 'engineer') ? personLabel(value) : value;
+
   const filterOptions = useMemo(() => {
+    const byName = (users: DirectoryUser[]) => [...users].sort((a, b) => a.fullName.localeCompare(b.fullName)).map(u => u.email);
     return {
       type: Array.from(new Set([...permitCategories.map(category => category.code), ...savedPermits.flatMap(p => [p.permitType, p.type, p.excavationType]).filter(Boolean).map(String).map(value => value.toUpperCase())])).sort(),
       status: ['DRAFT', 'ACTIVE', 'CLOSED'],
-      engineer: Array.from(new Set(savedPermits.map(p => p.siteEngineerSignature?.name).filter(Boolean))),
-      receiver: Array.from(new Set(savedPermits.map(p => p.receiverSignature?.name).filter(Boolean))),
-      issuer: Array.from(new Set(savedPermits.map(p => p.issuerSignature?.name).filter(Boolean))),
-      approver: Array.from(new Set(savedPermits.map(p => p.approverSignature?.name).filter(Boolean)))
+      engineer: byName(directoryByRole.engineer),
+      receiver: byName(directoryByRole.receiver),
+      issuer: byName(directoryByRole.issuer),
+      approver: byName(directoryByRole.approver)
     };
-  }, [savedPermits]);
+  }, [savedPermits, directoryByRole]);
 
-  const filteredPermits = savedPermits.filter(p => {
+  // Drop persisted selections that are no longer registered users (e.g. legacy name strings).
+  useEffect(() => {
+    if (!directoryLoaded) return;
+    setColumnFilters(prev => {
+      let changed = false;
+      const next = { ...prev };
+      (['receiver', 'issuer', 'approver', 'engineer'] as const).forEach(key => {
+        const valid = new Set(filterOptions[key]);
+        const kept = (prev[key] || []).filter(v => valid.has(v));
+        if (kept.length !== (prev[key] || []).length) { next[key] = kept; changed = true; }
+      });
+      return changed ? next : prev;
+    });
+  }, [directoryLoaded, filterOptions]);
+
+  const filteredPermits = savedPermits.filter(p => !!p).filter(p => {
     const sanitize = (value: any) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
     const safeSearch = sanitize(searchQuery);
     const matchesSearch = !safeSearch || [
@@ -221,12 +324,12 @@ export const Dashboard = () => {
     const permitType = String(p.permitType || p.type || p.excavationType || 'BG').toUpperCase();
     const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
 
-    if (columnFilters.type.length > 0 && !columnFilters.type.includes(permitType)) return false;
-    if (columnFilters.status.length > 0 && !columnFilters.status.includes(pStatus)) return false;
-    if (columnFilters.engineer.length > 0 && !columnFilters.engineer.includes(p.siteEngineerSignature?.name)) return false;
-    if (columnFilters.receiver.length > 0 && !columnFilters.receiver.includes(p.receiverSignature?.name)) return false;
-    if (columnFilters.issuer.length > 0 && !columnFilters.issuer.includes(p.issuerSignature?.name)) return false;
-    if (columnFilters.approver.length > 0 && !columnFilters.approver.includes(p.approverSignature?.name)) return false;
+    if ((columnFilters.type || []).length > 0 && !columnFilters.type.includes(permitType)) return false;
+    if ((columnFilters.status || []).length > 0 && !columnFilters.status.includes(pStatus)) return false;
+    if ((columnFilters.engineer || []).length > 0 && !columnFilters.engineer.includes(permitPersonEmail(p, 'engineer'))) return false;
+    if ((columnFilters.receiver || []).length > 0 && !columnFilters.receiver.includes(permitPersonEmail(p, 'receiver'))) return false;
+    if ((columnFilters.issuer || []).length > 0 && !columnFilters.issuer.includes(permitPersonEmail(p, 'issuer'))) return false;
+    if ((columnFilters.approver || []).length > 0 && !columnFilters.approver.includes(permitPersonEmail(p, 'approver'))) return false;
 
     return true;
   }).sort((a, b) => {
@@ -273,6 +376,7 @@ export const Dashboard = () => {
     setColumnFilters(emptyFilters);
     localStorage.removeItem(COLUMN_FILTERS_STORAGE_KEY);
     localStorage.removeItem(SEARCH_STORAGE_KEY);
+    localStorage.removeItem(COLUMNS_STORAGE_KEY);
     setSelectedColumns(DEFAULT_COLUMNS);
     setCurrentPage(1);
     setActiveFilterMenu(null);
@@ -324,9 +428,9 @@ export const Dashboard = () => {
     }
   };
 
-  const totalClosed = filteredPermits.filter(p => p.status === 'closed').length;
+  const totalClosed = filteredPermits.filter(p => String(p.status ?? '') === 'closed').length;
   const totalDrafts = filteredPermits.filter(p => p.isDraft).length;
-  const totalActive = filteredPermits.filter(p => !p.isDraft && p.status !== 'closed').length;
+  const totalActive = filteredPermits.filter(p => !p.isDraft && String(p.status ?? '') !== 'closed').length;
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden box-border bg-gray-50 p-4 sm:p-6 relative">
@@ -467,7 +571,7 @@ export const Dashboard = () => {
                                 {(filterOptions[col.id as keyof typeof filterOptions] as string[]).map((opt, idx) => (
                                   <label key={idx} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-blue-50 text-xs font-semibold">
                                     {columnFilters[col.id].includes(opt) ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} className="text-gray-300" />}
-                                    {opt}
+                                    {filterLabel(col.id, opt)}
                                     <input type="checkbox" className="hidden" checked={columnFilters[col.id].includes(opt)} onChange={() => toggleFilterOption(col.id, opt)} />
                                   </label>
                                 ))}
@@ -523,6 +627,9 @@ export const Dashboard = () => {
                           {selectedColumns.includes('receiver') && <td className="p-4 text-xs font-bold text-gray-600">{p.receiverSignature?.name || '-'}</td>}
                           {selectedColumns.includes('issuer') && <td className="p-4 text-xs font-bold text-gray-600">{p.issuerSignature?.name || '-'}</td>}
                           {selectedColumns.includes('approver') && <td className="p-4 text-xs font-bold text-gray-600">{p.approverSignature?.name || '-'}</td>}
+                          {selectedColumns.includes('issuedDate') && <td className="p-4 text-xs font-bold text-gray-600 whitespace-nowrap">{formatDateCell(p.issuedDate)}</td>}
+                          {selectedColumns.includes('commencementDate') && <td className="p-4 text-xs font-bold text-gray-600 whitespace-nowrap">{formatDateCell(p.commencementDate)}</td>}
+                          {selectedColumns.includes('endDate') && <td className="p-4 text-xs font-bold text-gray-600 whitespace-nowrap">{formatDateCell(p.endDate)}</td>}
                           {selectedColumns.includes('action') && (
                             <td className="p-4 text-center">
                               <div className="flex items-center justify-center gap-2">

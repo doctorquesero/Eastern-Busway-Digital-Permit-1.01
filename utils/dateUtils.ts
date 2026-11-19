@@ -1,5 +1,16 @@
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+export const formatDateTime = (value: string | undefined): string => {
+    if (!value) return '';
+    if (ISO_DATE.test(value)) {
+        const [year, month, day] = value.split('-');
+        return `${day}/${month}/${year} (time not recorded)`;
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
+
 // Returns a strict YYYY-MM-DD string, or '' for empty/invalid input (accepts ISO datetimes by truncating).
 export const toDateInputValue = (value: unknown): string => {
     if (typeof value !== 'string' || !value) return '';

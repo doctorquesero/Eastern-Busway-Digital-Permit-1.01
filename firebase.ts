@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore, memoryLocalCache } from "firebase/firestore";
 import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
 import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
 
@@ -13,7 +13,8 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+// Memory-only cache: no IndexedDB persistence, so every device reads live server state.
+export const db = initializeFirestore(app, { localCache: memoryLocalCache() });
 export const storage = getStorage(app);
 export const auth = getAuth(app);
 

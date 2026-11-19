@@ -7,14 +7,23 @@ export interface Signature {
     name: string;
     date: string;
     type: 'draw' | 'type';
+    email?: string;
 }
 
 export interface HandoverLog {
     id: string;
     date: string;
     receiverName: string;
+    receiverEmail?: string;
+    receiverId?: string;
     signature: Signature;
     initial: Signature;
+}
+
+export interface PermitNote {
+    text: string;
+    author: string;
+    timestamp: string;
 }
 
 export interface DailySignOff {
@@ -93,7 +102,7 @@ export interface Permit {
     env?: string;
     id: string;
     permitNumber: string;
-    itwocxNumber?: string;
+    itwocxNumber?: string | number;
     permitType?: 'excavation' | 'pump';
     status: 'draft' | 'active' | 'closed';
     createdAt: string;
@@ -141,6 +150,8 @@ export interface Permit {
     receiverSignature?: Signature;
     issuerEmail?: string;
     receiverEmail?: string;
+    receiverId?: string;
+    receiverUid?: string;
     receiver?: string;
     receiverName?: string;
     approverSignature?: Signature;
@@ -150,6 +161,7 @@ export interface Permit {
     handoverLogs: HandoverLog[];
     crewMembers: CrewMember[];
     otherNotes: string;
+    notesHistory?: PermitNote[];
     notesAuthor?: string;
     notesUpdatedAt?: string;
     photos: PermitPhoto[];
@@ -160,6 +172,7 @@ export interface Permit {
 
     // Closure (Pg 11)
     closureSignature?: Signature;
+    pdfBackupUrl?: string;
     closureReceiverName?: string;
     closureDate?: string;
     closureChecklistExcavationSafe?: boolean;
