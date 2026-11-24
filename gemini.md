@@ -133,3 +133,24 @@ RULE 2: 'Breaking Ground' permits MUST strictly use `permitType: 'BG'`.
 RULE 3: I will NEVER assume data structures; if I lack the original initialization logic, I will ask the Chief Architect before guessing. 
 RULE 4: I must not break the LIVE vs DEMO environment toggles.
 RULE 6: Never allow permit saving or issuing with empty required fields. Always highlight missing fields in red. Duplicate permit numbers are strictly forbidden.
+
+5. High-Powered Handheld Saw Permit Module (EB-TM-0-HS-000070 / HP) & Lessons Learned
+
+A. Cloud Module & iTwoCX Bridge Behavior
+  - The High-Powered Handheld Saw Permit (`handheld_saw` / `HP`, document code `EB-TM-0-HS-000070`) operates as an isolated module/workflow with frontend (`HandheldSawPermitDetail.tsx`, `HandheldSawPermitPDFLayout.tsx`, `utils/handheldSawPermit.ts`), Cloud Functions (`onPermitWritten` / `onDemoPermitWritten`), and Firebase Hosting deployment.
+  - Existing Breaking Ground (`BG`, `BGP`, `BE`, `EXCAVATION`), Pump Permit, and `firestore.rules` behaviors must remain protected and untouched unless explicitly requested.
+  - On permit closure, the UI may initially show iTwoCX sync status as `pending` while PDF compilation and asynchronous function execution complete; once processed, iTwoCX updates the permit status to `CLOSED` and attaches the generated PDF.
+
+B. Conditional Approvals Workflow (Uploaded PDF vs. Manual Entry)
+  - Zone Manager and Project Director approvals can be satisfied via a single signed approval sheet uploaded as a valid PDF (`application/pdf`).
+  - When a valid approval PDF is attached: hide (do not render and do not require or red-highlight) manual Zone Manager / Project Director names, PINs, ACL selections, signatures, and Zone Manager endorsement/safety-case inputs, while keeping the uploaded PDF controls and legal notice visible.
+  - When no approval PDF is attached: show and validate the manual approval fields/sign-off as required and display the short red New Zealand legal notice:
+    `⚠️ False or misleading approval records are an offence under NZ law (Health and Safety at Work Act 2015) and carry legal and disciplinary consequences.`
+
+C. Field Usability, Signature Persistence & PermitLink Pro Portability
+  - Optional comments in checklists/endorsements must remain usable without blocking progression or turning red when left blank.
+  - Receiver signature and existing permit progress must be preserved across ordinary edits and only cleared/reset when explicitly intended.
+  - When porting this module to PermitLink Pro (`permitlink-pro`), package it as a project-enabled module (`handheld_saw` / `HP`) scoped strictly under `tenants/{tenantId}` and connected through the project's ERP adapter layer rather than hardcoding live EBA credentials.
+
+
+
