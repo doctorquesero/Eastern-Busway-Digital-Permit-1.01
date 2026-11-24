@@ -734,7 +734,7 @@ const PermitPDFLayout: React.FC<PermitPDFLayoutProps> = ({ permit, pdfRef, curre
                         {pagePhotos.map(p => (
                             <div key={p.id} className="border-2 border-black rounded bg-gray-50 flex flex-col overflow-hidden box-border" style={{ height: '63mm', padding: '2mm' }}>
                                 <div className="flex items-center justify-center overflow-hidden" style={{ height: '49mm' }}>
-                                    <img crossOrigin="anonymous" src={p.url} alt="evidence" style={{ maxWidth: '100%', maxheight: '49mm', objectFit: 'contain' }} />
+                                    <img crossOrigin="anonymous" src={p.url} alt="evidence" style={{ maxWidth: '100%', maxHeight: '49mm', objectFit: 'contain' }} />
                                 </div>
                                 <p className="font-black text-[9px] uppercase bg-white border border-black mt-1 px-1 py-0.5 leading-tight overflow-hidden" style={{ height: '9mm' }}>{txt(p.caption)}</p>
                             </div>

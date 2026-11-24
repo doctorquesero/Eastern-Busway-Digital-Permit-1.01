@@ -142,7 +142,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
             return;
         }
 
-        const rawNum = permit.itwocxNumber?.replace(/\D/g, "") || "";
+        const rawNum = String(permit.itwocxNumber || '').replace(/\D/g, "");
         const finalData = { ...permit, status: 'issued', isDraft: false, syncStatus: 'pending', sync_status: 'pending', cxSyncPending: 'issue', cxSyncError: null } as any;
 
         setIsSubmitting(true);
@@ -317,7 +317,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
             <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm mb-6 flex justify-between items-center">
                 <div>
-                    <h2 className="text-2xl font-black uppercase text-gray-800">Pump Permit: PF#{permit.itwocxNumber?.replace(/\D/g, "") || 'UNASSIGNED'}</h2>
+                    <h2 className="text-2xl font-black uppercase text-gray-800">Pump Permit: PF#{String(permit.itwocxNumber || '').replace(/\D/g, "") || 'UNASSIGNED'}</h2>
                     <p className="text-gray-500 font-bold">{permit.projectName} - {permit.dewateringLocation}</p>
                 </div>
                 <div className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest ${isClosed ? 'bg-red-100 text-red-800' : (isIssued ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800')}`}>
@@ -355,7 +355,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                 <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">General Details</h3>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><DebouncedInput type="text" value={permit.itwocxNumber} onValueChange={v => updateField('itwocxNumber', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
+                                    <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><DebouncedInput type="text" value={String(permit.itwocxNumber || '')} onValueChange={v => updateField('itwocxNumber', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
                                     <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><DebouncedInput type="text" value={permit.projectName} onValueChange={v => updateField('projectName', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
 
                                     <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><DebouncedInput type="text" value={permit.requestingCompany} onValueChange={v => updateField('requestingCompany', v)} disabled={isClosed || isIssued} readOnly={isClosed || isIssued} className={inputClass} /></div>
@@ -399,7 +399,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                 <div className="mt-8 border border-gray-300 p-6 rounded-2xl bg-gray-50 shadow-sm">
                                     <p className="text-center font-black uppercase text-xs mb-4 tracking-widest text-gray-500">Requester Signature</p>
                                     {permit.siteEngineerSignature && (isIssued || isClosed) ? (
-                                        <div className="text-center"><img src={permit.siteEngineerSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.siteEngineerSignature.name}</p></div>
+                                        <div className="text-center"><img src={permit.siteEngineerSignature.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.siteEngineerSignature.name}</p></div>
                                     ) : (
                                         <SignaturePad label="Sign here to complete Details" onSave={(sig) => updateField('siteEngineerSignature', sig)} initialValue={permit.siteEngineerSignature} readOnly={isIssued || isClosed} />
                                     )}
@@ -421,7 +421,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                     </p>
                                     <p className="text-center font-black uppercase text-xs mb-4 tracking-widest text-blue-800">Receiver Initial Signature</p>
                                     {permit.receiverSignature && (isIssued || isClosed) ? (
-                                        <div className="text-center"><img src={permit.receiverSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase text-blue-900">{permit.receiverSignature.name}</p></div>
+                                        <div className="text-center"><img src={permit.receiverSignature.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase text-blue-900">{permit.receiverSignature.name}</p></div>
                                     ) : (
                                         <SignaturePad label="Sign here to receive permit" onSave={(sig) => updateField('receiverSignature', sig)} initialValue={permit.receiverSignature} readOnly={isIssued || isClosed} />
                                     )}
@@ -476,7 +476,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
 
                                     <div className={(!isIssuer || isIssued || isClosed) ? 'pointer-events-none opacity-50' : 'select-text pointer-events-auto'}>
                                         {permit.issuerSignature && (isIssued || isClosed) ? (
-                                            <div className="text-center"><img src={permit.issuerSignature.dataUrl} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.issuerSignature.name}</p></div>
+                                            <div className="text-center"><img src={permit.issuerSignature.data} className="h-16 mx-auto mix-blend-multiply" /><p className="font-bold text-sm uppercase">{permit.issuerSignature.name}</p></div>
                                         ) : (
                                             <SignaturePad label="Issuer Name to Execute Permit *" onSave={(sig) => updateField('issuerSignature', sig)} initialValue={permit.issuerSignature} readOnly={isIssued || isClosed} />
                                         )}
@@ -600,7 +600,7 @@ const PumpPermitDetail: React.FC<PumpPermitDetailProps> = ({ id, onBack }) => {
                                 <div className="bg-white p-4 rounded-xl border mb-4 inline-block mx-auto text-left">
                                     <p className="text-xs font-black text-gray-500 uppercase mb-1">Closed By</p>
                                     <p className="font-bold text-lg">{permit.closureReceiverName}</p>
-                                    {permit.closureSignature && <img src={permit.closureSignature.dataUrl} className="h-16 mt-2 mix-blend-multiply" />}
+                                    {permit.closureSignature && <img src={permit.closureSignature.data} className="h-16 mt-2 mix-blend-multiply" />}
                                 </div>
                             </div>
                         ) : (

@@ -245,7 +245,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
     const [isPreparingPDF, setIsPreparingPDF] = useState(false);
     // Downscaled copy of the permit used only to render the PDF; never written to Firestore.
     const [pdfPermit, setPdfPermit] = useState<Permit | null>(null);
-    const [closureStage, setClosureStage] = useState<1 | 2 | 3 | null>(null);
+    const [closureStage, setClosureStage] = useState<string | number | null>(null);
     const mountPDFLayout = async () => {
         setIsPreparingPDF(true);
         for (let i = 0; i < 50 && !pdfExportRef.current; i++) await new Promise(r => setTimeout(r, 100));
@@ -1068,7 +1068,7 @@ const PermitDetail: React.FC<PermitDetailProps> = ({ id, onBack }) => {
                                 <ol className="mt-6 space-y-3 text-sm sm:text-base font-bold">
                                     {['Generating closure PDF', 'Securing PDF backup', 'Saving closure and finalizing'].map((label, index) => (
                                         <li key={label} aria-current={closureStage === index + 1 ? 'step' : undefined} className={closureStage === index + 1 ? 'text-white' : 'text-gray-400'}>
-                                            {index + 1}/3 {label}{closureStage === index + 1 ? '...' : closureStage > index + 1 ? ' ✓' : ''}
+                                            {index + 1}/3 {label}{closureStage === index + 1 ? '...' : typeof closureStage === 'number' && closureStage > index + 1 ? ' ✓' : ''}
                                         </li>
                                     ))}
                                 </ol>

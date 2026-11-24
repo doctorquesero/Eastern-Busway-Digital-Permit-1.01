@@ -47,6 +47,88 @@ export interface MonitoringLogEntry {
     comments: string;
 }
 
+export type SawPermitYesNo = 'yes' | 'no';
+export type SawPermitServiceStatus = 'Y' | 'N' | 'U';
+export type SawPermitWorkControlStatus = 'yes' | 'no' | 'n/a';
+
+export interface SawPermitWorkControl {
+    answer: SawPermitWorkControlStatus | null;
+    comment: string;
+}
+
+export interface SawPermitAcceptor {
+    name: string;
+    signature?: Signature;
+    comments: string;
+    declaration: boolean;
+}
+
+export interface HandheldSawPermitDetails {
+    alternativesReviewed: SawPermitYesNo | null;
+    alternativesExplanation: string;
+    alternativesComments?: string;
+    safetyCase: {
+        scope: string;
+        itemBeingCut: string;
+        supportToPreventJamming: string;
+        directSupervision: string;
+        duration: string;
+    };
+    zoneManagerEndorsement?: Signature;
+    zoneManagerComments?: string;
+    projectDirectorDeclaration: boolean;
+    projectDirectorSignature?: Signature;
+    projectDirectorComments: string;
+    safetyCaseComments?: Record<string, string>;
+    issuerComments: string;
+    receiverComments: string;
+    jseaReference: string;
+    permitDetailsComments?: string;
+    startTime: string;
+    finishTime: string;
+    services: Record<string, SawPermitServiceStatus | null>;
+    serviceComments?: Record<string, string>;
+    otherServiceDetails: string;
+    drawingsReviewed: boolean;
+    drawingsReference: string;
+    drawingsUrl: string;
+    drawingsFileName: string;
+    equipmentMake: string;
+    equipmentModel: string;
+    equipmentComments?: Record<string, string>;
+    bladeGuards: SawPermitYesNo | null;
+    antiKickbackSystems: SawPermitYesNo | null;
+    workControls: SawPermitWorkControl[];
+    ppe: {
+        doubleEyeProtection: boolean | null;
+        gloves: boolean | null;
+        p2DustMask: boolean | null;
+        hearingProtection: boolean | null;
+        taskSpecific: string;
+        comments?: Record<string, string>;
+    };
+    issuerDeclaration: boolean;
+    receiverDeclaration: boolean;
+    acceptors: SawPermitAcceptor[];
+    closureType: 'cancellation' | 'works-completed' | null;
+    closureDeclaration: boolean;
+    closureComments: string;
+    onSiteIssue?: {
+        latitude: number;
+        longitude: number;
+        capturedAt: string;
+    };
+    managerApprovalUrl: string;
+    managerApprovalFileName: string;
+    managerApprovalContentType: string;
+    managerApprovalUploadedAt: string;
+    managerApprovalUploadedBy: string;
+    managerApprovalVerifiedByIssuer?: boolean;
+    managerApprovalVerifiedBy?: string;
+    managerApprovalVerifiedAt?: string;
+    managerApprovalVerificationComments?: string;
+}
+
 
 export interface PermitPhoto {
     id: string;
@@ -103,7 +185,7 @@ export interface Permit {
     id: string;
     permitNumber: string;
     itwocxNumber?: string | number;
-    permitType?: 'excavation' | 'pump';
+    permitType?: 'excavation' | 'pump' | 'handheld_saw';
     status: 'draft' | 'active' | 'closed';
     createdAt: string;
     issuedDate?: string;
@@ -212,6 +294,7 @@ export interface Permit {
     reqSheen?: boolean;
 
     monitoringLogs?: MonitoringLogEntry[];
+    handheldSaw?: HandheldSawPermitDetails;
 }
 
 // ==========================================

@@ -6,6 +6,7 @@ import { RefreshCw, Loader2, Trash2, ShieldAlert, Filter, Columns, CheckSquare, 
 import { getCurrentUserEmail, getCircuitBreakerRemainingTime } from '../services/cx';
 import { getNamePartsFromEmail } from '../utils/userNames';
 import { getAppMode, getTargetCollection } from '../utils/appMode';
+import { generateId } from '../utils/id';
 
 // 🚀 DICCIONARIO OFICIAL ALINEADO CON iTwoCX
 const permitCategories = [
@@ -22,7 +23,7 @@ const permitCategories = [
   { code: 'ISO', name: 'Isolation Permits', icon: '🛑', color: 'bg-rose-50 text-rose-400', border: 'border-rose-100' },
   { code: 'WB', name: 'Workbox Permits', icon: '🏢', color: 'bg-slate-50 text-slate-400', border: 'border-slate-100' },
   { code: 'WH', name: 'Working at Heights', icon: '🧗', color: 'bg-sky-50 text-sky-400', border: 'border-sky-100' },
-  { code: 'HP', name: 'High-Powered Saw', icon: '🪚', color: 'bg-teal-50 text-teal-400', border: 'border-teal-100' },
+  { code: 'HP', name: 'High-Powered Handheld Saw Permit', icon: '🪚', color: 'bg-teal-100 text-teal-900', border: 'border-teal-200' },
   { code: 'USW1', name: 'Utility Services L1', icon: '⚡', color: 'bg-fuchsia-50 text-fuchsia-400', border: 'border-fuchsia-100' },
   { code: 'USW2', name: 'Utility Services L2', icon: '⚡', color: 'bg-pink-50 text-pink-400', border: 'border-pink-100' },
 ];
@@ -212,13 +213,22 @@ export const Dashboard = () => {
       navigate('/new', { state: { permitType: code } });
     } else if (code === 'PUMP') {
       navigate('/new-pump', { state: { permitType: code } });
+    } else if (code === 'HP') {
+      navigate(`/handheld-saw/${generateId()}`, { state: { createHandheldSaw: true } });
     } else {
       navigate('/under-construction');
     }
   };
 
+  const formatDeleteRef = (permitNum: string) => {
+    const trimmed = String(permitNum || '').trim();
+    if (!trimmed || /^draft$/i.test(trimmed)) return 'DRAFT';
+    const stripped = trimmed.replace(/^PF#?\s*/i, '').trim();
+    return stripped ? `PF#${stripped}` : trimmed;
+  };
+
   const requestDeletion = (id: string, permitNum: string) => {
-    setDeleteTarget({ id, num: permitNum });
+    setDeleteTarget({ id, num: formatDeleteRef(permitNum) });
     setSecurityPin('');
     setPinError('');
   };
@@ -230,7 +240,7 @@ export const Dashboard = () => {
       await deleteDoc(doc(db, getTargetCollection(), deleteTarget.id));
       setSavedPermits(prev => prev.filter(p => p.id !== deleteTarget.id));
       setDeleteTarget(null);
-      alert(`✅ Permit PF#${deleteTarget.num} was securely and permanently deleted.`);
+      alert(`✅ Permit ${deleteTarget.num} was securely and permanently deleted.`);
     } catch (error: any) {
       alert(`Error deleting permit: ${error.message}`);
     }
@@ -282,7 +292,7 @@ export const Dashboard = () => {
   const filterOptions = useMemo(() => {
     const byName = (users: DirectoryUser[]) => [...users].sort((a, b) => a.fullName.localeCompare(b.fullName)).map(u => u.email);
     return {
-      type: Array.from(new Set([...permitCategories.map(category => category.code), ...savedPermits.flatMap(p => [p.permitType, p.type, p.excavationType]).filter(Boolean).map(String).map(value => value.toUpperCase())])).sort(),
+      type: Array.from(new Set([...permitCategories.map(category => category.code), ...savedPermits.flatMap(p => [p.permitType, p.type, p.excavationType]).filter(Boolean).map(String).map(value => value.toUpperCase() === 'HANDHELD_SAW' ? 'HP' : value.toUpperCase())])).sort(),
       status: ['DRAFT', 'ACTIVE', 'CLOSED'],
       engineer: byName(directoryByRole.engineer),
       receiver: byName(directoryByRole.receiver),
@@ -321,7 +331,8 @@ export const Dashboard = () => {
 
     if (!matchesSearch) return false;
 
-    const permitType = String(p.permitType || p.type || p.excavationType || 'BG').toUpperCase();
+    const rawPermitType = String(p.permitType || p.type || p.excavationType || 'BG').toUpperCase();
+    const permitType = rawPermitType === 'HANDHELD_SAW' ? 'HP' : rawPermitType;
     const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
 
     if ((columnFilters.type || []).length > 0 && !columnFilters.type.includes(permitType)) return false;
@@ -407,7 +418,7 @@ export const Dashboard = () => {
       filteredPermits.forEach(p => {
         sheet.addRow({
           reference: p.itwocxNumber || p.permitNumber || 'DRAFT',
-          type: String(p.permitType || p.excavationType || 'BG').toUpperCase(),
+          type: String(p.permitType || p.excavationType || 'BG').toUpperCase() === 'HANDHELD_SAW' ? 'HP' : String(p.permitType || p.excavationType || 'BG').toUpperCase(),
           location: p.location || '',
           status: p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE'),
           engineer: p.siteEngineerSignature?.name || '',
@@ -441,7 +452,7 @@ export const Dashboard = () => {
             <h3 className="text-xl font-black text-red-700 mb-2 flex items-center gap-2 uppercase tracking-tighter">
               <ShieldAlert size={24} /> Master Override
             </h3>
-            <p className="text-sm text-gray-600 mb-6 font-medium">You are about to permanently delete <strong>PF#{deleteTarget.num}</strong>. Enter PIN to verify.</p>
+            <p className="text-sm text-gray-600 mb-6 font-medium">You are about to permanently delete <strong>{deleteTarget.num}</strong>. Enter PIN to verify.</p>
             <input type="password" value={securityPin} onChange={e => { setSecurityPin(e.target.value); setPinError(''); }} placeholder="Enter PIN..." className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 mb-2 focus:border-red-500 text-center tracking-[0.5em] font-black outline-none" />
             <div className="h-6 mb-4">{pinError && <p className="text-red-600 text-xs font-bold text-center">{pinError}</p>}</div>
             <div className="flex justify-end gap-3">
@@ -599,13 +610,14 @@ export const Dashboard = () => {
                   ) : (
                     visiblePermits.map((p) => {
                       const pStatus = p.status === 'closed' ? 'CLOSED' : (p.isDraft ? 'DRAFT' : 'ACTIVE');
-                      const permitTypeDisplay = p.permitType ? String(p.permitType).toUpperCase() : (p.excavationType ? String(p.excavationType).toUpperCase() : 'BG');
+                      const permitTypeDisplay = ['handheld_saw', 'hp'].includes(String(p.permitType || '').toLowerCase()) ? 'HP' : p.permitType ? String(p.permitType).toUpperCase() : (p.excavationType ? String(p.excavationType).toUpperCase() : 'BG');
+                      const permitRoute = permitTypeDisplay === 'PUMP' ? `/pump-permit/${p.id}` : permitTypeDisplay === 'HP' ? `/handheld-saw/${p.id}` : `/permit/${p.id}`;
                       return (
                         <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                           {selectedColumns.includes('reference') && (
                             <td className="p-4">
                               <button
-                                onClick={() => navigate(permitTypeDisplay === 'PUMP' ? `/pump-permit/${p.id}` : `/permit/${p.id}`)}
+                                onClick={() => navigate(permitRoute)}
                                 className="font-black text-blue-700 hover:text-blue-900 hover:underline cursor-pointer transition-colors text-left"
                               >
                                 {p.itwocxNumber || p.permitNumber || 'DRAFT'}
@@ -633,7 +645,7 @@ export const Dashboard = () => {
                           {selectedColumns.includes('action') && (
                             <td className="p-4 text-center">
                               <div className="flex items-center justify-center gap-2">
-                                <button onClick={() => navigate(permitTypeDisplay === 'PUMP' ? `/pump-permit/${p.id}` : `/permit/${p.id}`)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">Open</button>
+                                <button onClick={() => navigate(permitRoute)} className="bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-black text-xs uppercase transition-colors">Open</button>
                                 {isSuperAdmin && (
                                   <button onClick={() => requestDeletion(p.id, p.itwocxNumber || 'DRAFT')} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-colors" title="Secure Delete"><Trash2 size={16} /></button>
                                 )}
@@ -675,7 +687,7 @@ export const Dashboard = () => {
               </div>
               <div className="grid max-h-[70vh] grid-cols-1 gap-3 overflow-y-auto p-5 sm:grid-cols-2">
                 {permitCategories.map((permit) => {
-                  const isActive = permit.code === 'BG' || permit.code === 'PUMP';
+                  const isActive = permit.code === 'BG' || permit.code === 'PUMP' || permit.code === 'HP';
                   return (
                     <button
                       key={permit.code}

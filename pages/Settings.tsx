@@ -42,7 +42,7 @@ import { sanitizeForFirestore } from "../utils/firestore";
 import { getNamePartsFromEmail } from "../utils/userNames";
 import { ChangePinForm } from "../components/ChangePinForm";
 
-type Role = "Master" | "Issuer" | "Receiver" | "Approver" | "Site Engineer";
+type Role = "Master" | "Issuer" | "Receiver" | "Approver" | "Site Engineer" | "Zone Manager" | "Project Director";
 
 interface UserAssignment {
     email?: string;
@@ -76,6 +76,8 @@ const ROLE_OPTIONS: Role[] = [
     "Receiver",
     "Approver",
     "Site Engineer",
+    "Zone Manager",
+    "Project Director",
 ];
 const DEFAULT_SETTINGS: AppSettings = {
     companyName: "Eastern Busway Alliance",

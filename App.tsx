@@ -6,6 +6,7 @@ import PermitDetail from './pages/PermitDetail';
 import AuditPdfView from './pages/AuditPdfView';
 import NewPumpPermit from './pages/NewPumpPermit';
 import PumpPermitDetail from './pages/PumpPermitDetail';
+import HandheldSawPermitDetail from './pages/HandheldSawPermitDetail';
 import { UnderConstruction } from './pages/UnderConstruction';
 import { Settings as SettingsPage } from './pages/Settings';
 import MetricsDashboard from './metrics-performance/web/MetricsDashboard';
@@ -49,6 +50,13 @@ const PumpPermitDetailContainer = () => {
   const navigate = useNavigate();
   if (!id) return <Navigate to="/" replace />;
   return <PumpPermitDetail id={id} onBack={() => navigate('/')} />;
+};
+
+const HandheldSawPermitDetailContainer = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  if (!id) return <Navigate to="/" replace />;
+  return <HandheldSawPermitDetail id={id} onBack={() => navigate('/')} />;
 };
 
 // ðŸš€ NÃšCLEO DE NAVEGACIÃ“N (Para poder usar useLocation)
@@ -136,6 +144,7 @@ const MainApp = ({ userRole, userEmail, handleLogout }: { userRole: string, user
             <Route path="/permit/:id" element={<PermitDetailContainer />} />
             <Route path="/new-pump" element={<NewPumpPermit onCancel={() => navigate('/')} onComplete={() => navigate('/')} />} />
             <Route path="/pump-permit/:id" element={<PumpPermitDetailContainer />} />
+            <Route path="/handheld-saw/:id" element={<HandheldSawPermitDetailContainer />} />
             <Route path="/under-construction" element={<UnderConstruction />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/metrics" element={<MetricsDashboard />} />

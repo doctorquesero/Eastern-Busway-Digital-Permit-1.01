@@ -168,7 +168,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
             return;
         }
 
-        const rawNum = formData.itwocxNumber?.replace(/\D/g, "") || "";
+        const rawNum = String(formData.itwocxNumber || '').replace(/\D/g, "");
         if (getPermits().some(p => String(p.itwocxNumber || "").replace(/\D/g, "") === rawNum && p.id !== formData.id)) {
             alert(`âš ï¸ STOP: Permit PF#${rawNum} already exists in the system!`); return;
         }
@@ -206,7 +206,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
     const ReadOnlyPermitHeader = () => (
         <div className="mb-6 bg-gray-50 p-4 rounded-xl border border-gray-200 flex justify-between items-center shadow-inner">
             <span className="text-xs font-black text-gray-500 uppercase tracking-widest">Active Pump Permit Ref</span>
-            <span className="text-xl font-black text-blue-900">PF#{formData.itwocxNumber?.replace(/\D/g, "") || 'UNASSIGNED'}</span>
+            <span className="text-xl font-black text-blue-900">PF#{String(formData.itwocxNumber || '').replace(/\D/g, "") || 'UNASSIGNED'}</span>
         </div>
     );
 
@@ -215,7 +215,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
             <div className="flex items-center justify-between mb-6"><button onClick={onCancel} className="text-gray-500 font-bold bg-white px-4 py-2 rounded-lg shadow-sm border"><ArrowLeft size={16} className="inline mr-1" /> Back</button></div>
 
             <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 shadow-sm mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-                <h2 className="text-xl sm:text-2xl font-black uppercase text-gray-800">Draft Pump Permit: PF#{formData.itwocxNumber?.replace(/\D/g, "") || ''}</h2>
+                <h2 className="text-xl sm:text-2xl font-black uppercase text-gray-800">Draft Pump Permit: PF#{String(formData.itwocxNumber || '').replace(/\D/g, "") || ''}</h2>
                 <div className="bg-blue-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest text-center flex items-center gap-2">
                     <CloudUpload size={14} /> Cloud Sync Ready
                 </div>
@@ -248,7 +248,7 @@ const NewPumpPermit: React.FC<NewPumpPermitProps> = ({ onCancel, onComplete }) =
                     <h3 className="text-xl font-black border-b border-gray-100 pb-2 uppercase text-blue-900 mb-6">General Details</h3>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><DebouncedInput type="text" value={formData.itwocxNumber} onValueChange={v => updateField('itwocxNumber', v)} className={inputClass} placeholder="e.g. 9130" /></div>
+                        <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">ITWOCX Permit # *</label><DebouncedInput type="text" value={String(formData.itwocxNumber || '')} onValueChange={v => updateField('itwocxNumber', v)} className={inputClass} placeholder="e.g. 9130" /></div>
                         <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Project Name *</label><DebouncedInput type="text" value={formData.projectName} onValueChange={v => updateField('projectName', v)} className={inputClass} /></div>
 
                         <div><label className="block text-xs font-black mb-2 text-gray-600 uppercase">Requesting Company *</label><DebouncedInput type="text" value={formData.requestingCompany} onValueChange={v => updateField('requestingCompany', v)} className={inputClass} /></div>

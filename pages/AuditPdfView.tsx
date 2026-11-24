@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import { db } from '../firebase';
 import { getTargetCollection } from '../utils/appMode';
 import PermitPDFLayout from '../components/PermitPDFLayout';
+import HandheldSawPermitPDFLayout from '../components/HandheldSawPermitPDFLayout';
 import { Permit, INITIAL_PART_A, INITIAL_PART_B, INITIAL_RECEIVER_CHECKLIST, INITIAL_HANDOVER_CHECKLIST } from '../types';
 
 const CEASE_WORKS_ITEMS = [
@@ -38,6 +39,14 @@ const AuditPdfView: React.FC = () => {
 
     if (error) return <div className="p-10 text-center font-bold text-red-700">{error}</div>;
     if (!permit) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" size={32} /></div>;
+    if (permit.permitType === 'handheld_saw') {
+        return (
+            <div className="bg-gray-200 min-h-screen overflow-x-auto py-4">
+                <div className="bg-amber-100 border-b-2 border-amber-500 text-amber-900 text-center text-xs font-black uppercase p-2 mb-4">Audit copy — read only</div>
+                <HandheldSawPermitPDFLayout permit={{ ...permit, id: permit.id || permitId || '' }} />
+            </div>
+        );
+    }
 
     const handovers = Array.isArray(permit.handoverLogs) ? permit.handoverLogs : [];
     const last = handovers[handovers.length - 1];

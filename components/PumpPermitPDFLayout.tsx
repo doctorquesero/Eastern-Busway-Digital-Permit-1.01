@@ -27,7 +27,7 @@ const PumpPermitPDFLayout: React.FC<PumpPermitPDFLayoutProps> = ({ permit }) => 
                 </div>
                 <div className="text-right">
                     <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">ITWOCX Ref</p>
-                    <p className="text-2xl font-black text-red-600">PF#{permit.itwocxNumber?.replace(/\D/g, "")}</p>
+                    <p className="text-2xl font-black text-red-600">PF#{String(permit.itwocxNumber || '').replace(/\D/g, "")}</p>
                     <p className="text-xs font-bold mt-2">Status: <span className="uppercase text-blue-800">{permit.status}</span></p>
                 </div>
             </div>
@@ -85,7 +85,7 @@ const PumpPermitPDFLayout: React.FC<PumpPermitPDFLayoutProps> = ({ permit }) => 
                     <h3 className="font-black text-sm uppercase text-gray-700 mb-2">Requester (Site Engineer)</h3>
                     {permit.siteEngineerSignature ? (
                         <>
-                            <img src={permit.siteEngineerSignature.dataUrl} className="h-16 mb-1 mix-blend-multiply border-b border-gray-200 pb-1" />
+                            <img src={permit.siteEngineerSignature.data} className="h-16 mb-1 mix-blend-multiply border-b border-gray-200 pb-1" />
                             <p className="font-bold">{permit.siteEngineerSignature.name}</p>
                             <p className="text-xs text-gray-500">{new Date(permit.siteEngineerSignature.date).toLocaleString()}</p>
                         </>
@@ -95,7 +95,7 @@ const PumpPermitPDFLayout: React.FC<PumpPermitPDFLayoutProps> = ({ permit }) => 
                     <h3 className="font-black text-sm uppercase text-gray-700 mb-2">Receiver</h3>
                     {permit.receiverSignature ? (
                         <>
-                            <img src={permit.receiverSignature.dataUrl} className="h-16 mb-1 mix-blend-multiply border-b border-gray-200 pb-1" />
+                            <img src={permit.receiverSignature.data} className="h-16 mb-1 mix-blend-multiply border-b border-gray-200 pb-1" />
                             <p className="font-bold">{permit.receiverSignature.name}</p>
                             <p className="text-xs text-gray-500">{new Date(permit.receiverSignature.date).toLocaleString()}</p>
                         </>
@@ -105,7 +105,7 @@ const PumpPermitPDFLayout: React.FC<PumpPermitPDFLayoutProps> = ({ permit }) => 
                     <h3 className="font-black text-sm uppercase text-gray-700 mb-2">Issuer Authorization</h3>
                     {permit.issuerSignature ? (
                         <>
-                            <img src={permit.issuerSignature.dataUrl} className="h-16 mb-1 mix-blend-multiply border-b border-gray-200 pb-1" />
+                            <img src={permit.issuerSignature.data} className="h-16 mb-1 mix-blend-multiply border-b border-gray-200 pb-1" />
                             <p className="font-bold">{permit.issuerSignature.name}</p>
                             <p className="text-xs text-gray-500">{new Date(permit.issuerSignature.date).toLocaleString()}</p>
                         </>
@@ -192,7 +192,7 @@ const PumpPermitPDFLayout: React.FC<PumpPermitPDFLayoutProps> = ({ permit }) => 
                         <div className="p-2 border-r border-gray-400 h-16 flex flex-col justify-end relative">
                             <div className="absolute top-2 left-2 bg-cyan-300 font-bold px-1 text-sm">Signature</div>
                             {permit.closureSignature && (
-                                <img src={permit.closureSignature.dataUrl} className="h-10 mx-auto mix-blend-multiply mb-1" />
+                                <img src={permit.closureSignature.data} className="h-10 mx-auto mix-blend-multiply mb-1" />
                             )}
                         </div>
                         <div className="p-2 h-16 flex flex-col justify-end relative">

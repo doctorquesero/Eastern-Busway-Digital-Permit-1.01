@@ -45,7 +45,9 @@ const PERMIT_CONFIG: Record<string, PermitTypeSettings> = {
     'road_corridor': { allowed: true, pdfPrefix: 'Road_Corridor' },
     'isolation': { allowed: true, pdfPrefix: 'Isolation' },
     'electrical': { allowed: true, pdfPrefix: 'Electrical_Isolation' },
-    'environmental': { allowed: true, pdfPrefix: 'Environmental' }
+    'environmental': { allowed: true, pdfPrefix: 'Environmental' },
+    'HP': { allowed: true, pdfPrefix: 'High_Powered_Handheld_Saw' },
+    'handheld_saw': { allowed: true, pdfPrefix: 'High_Powered_Handheld_Saw' }
 };
 
 const getBaseOptions = (sessionKey: string, method: string = "GET") => {
