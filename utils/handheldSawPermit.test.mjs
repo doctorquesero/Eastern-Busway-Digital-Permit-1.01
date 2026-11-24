@@ -319,6 +319,15 @@ test('withClearedSignatureDeletes only deletes receiverSignature when explicitly
 
 test('uploaded approval PDF satisfies approval without manual Zone Manager or Project Director sign-off', () => {
     const uploadedPdfOnly = validPermit();
+    uploadedPdfOnly.handheldSaw.alternativesReviewed = null;
+    uploadedPdfOnly.handheldSaw.alternativesExplanation = '';
+    uploadedPdfOnly.handheldSaw.safetyCase = {
+        scope: '',
+        itemBeingCut: '',
+        supportToPreventJamming: '',
+        directSupervision: '',
+        duration: ''
+    };
     uploadedPdfOnly.handheldSaw.zoneManagerEndorsement = undefined;
     uploadedPdfOnly.handheldSaw.projectDirectorSignature = undefined;
     uploadedPdfOnly.handheldSaw.projectDirectorDeclaration = false;
@@ -326,6 +335,25 @@ test('uploaded approval PDF satisfies approval without manual Zone Manager or Pr
     assert.equal(hasUploadedApprovalPdf(uploadedPdfOnly.handheldSaw), true);
     assert.equal(hasSatisfiedHandheldSawApproval(uploadedPdfOnly.handheldSaw), true);
     assert.deepEqual(validateHandheldSawIssuance(uploadedPdfOnly), []);
+
+    // When NO approval PDF is uploaded, Zone Manager Endorsement & Safety Case fields remain required.
+    const noPdfBlankPartB = validPermit();
+    noPdfBlankPartB.handheldSaw.managerApprovalUrl = '';
+    noPdfBlankPartB.handheldSaw.managerApprovalContentType = '';
+    noPdfBlankPartB.handheldSaw.managerApprovalVerifiedByIssuer = false;
+    noPdfBlankPartB.handheldSaw.alternativesReviewed = null;
+    noPdfBlankPartB.handheldSaw.alternativesExplanation = '';
+    noPdfBlankPartB.handheldSaw.safetyCase = {
+        scope: '',
+        itemBeingCut: '',
+        supportToPreventJamming: '',
+        directSupervision: '',
+        duration: ''
+    };
+    const noPdfErrors = validateHandheldSawIssuance(noPdfBlankPartB);
+    assert.ok(noPdfErrors.some(error => error.includes('Zone Manager explanation of alternatives is required.')));
+    assert.ok(noPdfErrors.some(error => error.includes('Safety case: scope of work is required.')));
+    assert.ok(noPdfErrors.some(error => error.includes('Zone Manager must record whether alternatives were reviewed.')));
 
     const nonPdfUpload = validPermit();
     nonPdfUpload.handheldSaw.zoneManagerEndorsement = undefined;

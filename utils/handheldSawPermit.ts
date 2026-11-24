@@ -278,6 +278,7 @@ export const validateHandheldSawIssuance = (permit: Permit): string[] => {
     const details = permit.handheldSaw;
     const errors: string[] = [];
     if (!details) return ['Handheld saw permit data is missing.'];
+    const uploadedApprovalPdf = hasUploadedApprovalPdf(details);
     const requiredText: Array<[string, unknown]> = [
         ['Permit number', formatHandheldSawPermitNumber(permit.itwocxNumber || permit.permitNumber)],
         ['Work location', permit.location],
@@ -286,12 +287,14 @@ export const validateHandheldSawIssuance = (permit: Permit): string[] => {
         ['Finish date', permit.endDate],
         ['Start time', details.startTime],
         ['Finish time', details.finishTime],
-        ['Zone Manager explanation of alternatives', details.alternativesExplanation],
-        ['Safety case: scope of work', details.safetyCase.scope],
-        ['Safety case: item being cut', details.safetyCase.itemBeingCut],
-        ['Safety case: support to prevent blade jamming', details.safetyCase.supportToPreventJamming],
-        ['Safety case: direct supervision', details.safetyCase.directSupervision],
-        ['Safety case: duration of work', details.safetyCase.duration],
+        ...(!uploadedApprovalPdf ? [
+            ['Zone Manager explanation of alternatives', details.alternativesExplanation],
+            ['Safety case: scope of work', details.safetyCase.scope],
+            ['Safety case: item being cut', details.safetyCase.itemBeingCut],
+            ['Safety case: support to prevent blade jamming', details.safetyCase.supportToPreventJamming],
+            ['Safety case: direct supervision', details.safetyCase.directSupervision],
+            ['Safety case: duration of work', details.safetyCase.duration]
+        ] as Array<[string, unknown]> : []),
         ['Equipment make', details.equipmentMake],
         ['Equipment model', details.equipmentModel],
         ['Task-specific PPE', details.ppe.taskSpecific]
@@ -303,8 +306,9 @@ export const validateHandheldSawIssuance = (permit: Permit): string[] => {
     if (!hasHandheldSawSchedule(permit.commencementDate || '', details.startTime, permit.endDate || '', details.finishTime)) {
         errors.push('Finish date and time must be after the start and within the 7-day permit validity period.');
     }
-    if (!details.alternativesReviewed) errors.push('Zone Manager must record whether alternatives were reviewed.');
-    const uploadedApprovalPdf = hasUploadedApprovalPdf(details);
+    if (!uploadedApprovalPdf && !details.alternativesReviewed) {
+        errors.push('Zone Manager must record whether alternatives were reviewed.');
+    }
     if (!hasSatisfiedHandheldSawApproval(details)) {
         errors.push('Complete one approval path: upload a Manager Approval PDF, or complete Zone Manager endorsement / Project Director approval (PIN + ACL required).');
     }

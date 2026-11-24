@@ -844,33 +844,17 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
 
             {activeTab === 'approvals' && (
                 <div className="space-y-5">
-                    <FormSection title="Part B: Zone Manager Endorsement & Safety Case">
-                        <SelectField label="Have all practical and reasonable alternatives to using a high-powered handheld saw been identified and explored?" value={data.alternativesReviewed || ''} options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]} disabled={isClosed || (!isIssuer && !isZoneManager)} required invalid={!data.alternativesReviewed} onChange={value => updateSaw({ alternativesReviewed: (value || null) as 'yes' | 'no' | null })} />
-                        <TextAreaField label="Alternatives considered and why unsuitable (or identify attached documentation)" value={data.alternativesExplanation} onChange={alternativesExplanation => updateSaw({ alternativesExplanation })} required invalid={isMissing(data.alternativesExplanation)} disabled={isClosed || (!isIssuer && !isZoneManager)} />
-                        <div className="grid gap-4 md:grid-cols-2">
-                            {([
-                                ['scope', '1. What is the scope of work?'],
-                                ['itemBeingCut', '2. What is being cut? Materials, size and conditions'],
-                                ['supportToPreventJamming', '3. How is the item supported to prevent blade jamming?'],
-                                ['directSupervision', '4. Is direct supervision oversight planned?'],
-                                ['duration', '5. What is the duration of the work?']
-                            ] as const).map(([field, label]) => (
-                                <TextAreaField key={field} label={label} value={data.safetyCase[field]} onChange={value => updateSaw({ safetyCase: { ...data.safetyCase, [field]: value } })} required invalid={isMissing(data.safetyCase[field])} disabled={isClosed || (!isIssuer && !isZoneManager)} />
-                            ))}
-                        </div>
-                    </FormSection>
-
                     <FormSection title="Manager Approval PDF">
                         <p role="note" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-bold text-red-700">
                             {HANDHELD_SAW_APPROVAL_LEGAL_WARNING}
                         </p>
                         <p className="rounded-lg bg-blue-50 p-3 text-sm font-semibold text-blue-950">
-                            Upload a signed regional / zone / project manager approval PDF. When a valid approval PDF is uploaded, manual Zone Manager and Project Director PIN/ACL sign-off is not required.
+                            Upload a signed regional / zone / project manager approval PDF. When a valid approval PDF is uploaded, manual Zone Manager and Project Director approval fields and PIN/ACL sign-off are not required.
                         </p>
                         {hasApprovalPdf ? (
                             <div className="space-y-2 rounded-lg border border-green-300 bg-green-50 p-4">
                                 <p className="font-black text-green-900">Approval PDF attached: {data.managerApprovalFileName}</p>
-                                <p className="text-xs font-bold text-green-800">Approval path satisfied — manual Zone Manager and Project Director PIN/ACL sign-off is not required.</p>
+                                <p className="text-xs font-bold text-green-800">Approval path satisfied — manual Zone Manager endorsement, safety case, and Project Director PIN/ACL sign-off are not required.</p>
                                 <a href={data.managerApprovalUrl} target="_blank" rel="noreferrer" className="inline-block break-all text-sm font-bold text-blue-700 underline">Open approval PDF</a>
                                 {!isClosed && (isIssuer || isSiteEngineer || isZoneManager) && <div>
                                     <button type="button" onClick={() => void removeManagerApproval()} disabled={isUploading} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-black text-red-700 disabled:opacity-50">
@@ -878,7 +862,7 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
                                     </button>
                                 </div>}
                             </div>
-                        ) : <p className={`text-sm font-bold ${approvalsComplete ? 'text-gray-600' : 'text-red-700'}`}>No Manager Approval PDF uploaded{approvalsComplete ? ' (optional because manual Zone Manager or Project Director sign-off is complete).' : ' — upload an approval PDF above, or complete manual Zone Manager / Project Director PIN + ACL sign-off below.'}</p>}
+                        ) : <p className={`text-sm font-bold ${approvalsComplete ? 'text-gray-600' : 'text-red-700'}`}>No Manager Approval PDF uploaded{approvalsComplete ? ' (optional because manual Zone Manager or Project Director sign-off is complete).' : ' — upload an approval PDF above, or complete manual Zone Manager / Project Director approval below.'}</p>}
                         <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg px-4 py-3 text-sm font-black text-white ${isUploading || isClosed || !(isIssuer || isSiteEngineer || isZoneManager) ? 'bg-gray-400' : 'bg-teal-700 hover:bg-teal-800'}`}>
                             {isUploading ? <Loader2 className="animate-spin" size={16} /> : <CloudUpload size={16} />}
                             {hasApprovalPdf ? 'Replace Manager Approval PDF' : 'Upload Manager Approval PDF'}
@@ -895,6 +879,22 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
                     </FormSection>
 
                     {!hasApprovalPdf && <>
+                        <FormSection title="Part B: Zone Manager Endorsement & Safety Case">
+                            <SelectField label="Have all practical and reasonable alternatives to using a high-powered handheld saw been identified and explored?" value={data.alternativesReviewed || ''} options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]} disabled={isClosed || (!isIssuer && !isZoneManager)} required invalid={!data.alternativesReviewed} onChange={value => updateSaw({ alternativesReviewed: (value || null) as 'yes' | 'no' | null })} />
+                            <TextAreaField label="Alternatives considered and why unsuitable (or identify attached documentation)" value={data.alternativesExplanation} onChange={alternativesExplanation => updateSaw({ alternativesExplanation })} required invalid={isMissing(data.alternativesExplanation)} disabled={isClosed || (!isIssuer && !isZoneManager)} />
+                            <div className="grid gap-4 md:grid-cols-2">
+                                {([
+                                    ['scope', '1. What is the scope of work?'],
+                                    ['itemBeingCut', '2. What is being cut? Materials, size and conditions'],
+                                    ['supportToPreventJamming', '3. How is the item supported to prevent blade jamming?'],
+                                    ['directSupervision', '4. Is direct supervision oversight planned?'],
+                                    ['duration', '5. What is the duration of the work?']
+                                ] as const).map(([field, label]) => (
+                                    <TextAreaField key={field} label={label} value={data.safetyCase[field]} onChange={value => updateSaw({ safetyCase: { ...data.safetyCase, [field]: value } })} required invalid={isMissing(data.safetyCase[field])} disabled={isClosed || (!isIssuer && !isZoneManager)} />
+                                ))}
+                            </div>
+                        </FormSection>
+
                         <FormSection title="Part B — Zone Manager Sign-off (PIN + ACL Required)">
                             {aclLoadError && <p className="rounded bg-red-50 p-3 text-sm font-bold text-red-800">{aclLoadError}; Zone Manager signatures are unavailable until the ACL can be verified.</p>}
                             <AclRoleSignature users={aclUsers} role="Zone Manager" label="Endorsed By — Zone Manager signature" initialValue={data.zoneManagerEndorsement} invalid={!approvalsComplete} readOnly={isClosed || !!aclLoadError} onSave={(signature, user, pin) => saveAclSignature('zoneManagerEndorsement', signature, user, pin)} />
