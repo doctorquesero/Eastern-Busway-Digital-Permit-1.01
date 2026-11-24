@@ -2,6 +2,19 @@ import type { HandheldSawPermitDetails, Permit, SawPermitWorkControl } from '../
 
 export const HANDHELD_SAW_TITLE = 'High-Powered Handheld Saw Permit';
 export const HANDHELD_SAW_VALIDITY_DAYS = 7;
+export const HANDHELD_SAW_APPROVAL_LEGAL_WARNING =
+    '⚠️ False or misleading approval records are an offence under NZ law (Health and Safety at Work Act 2015) and carry legal and disciplinary consequences.';
+
+export const hasUploadedApprovalPdf = (details?: Partial<HandheldSawPermitDetails> | null): boolean =>
+    Boolean(details?.managerApprovalUrl && details?.managerApprovalContentType === 'application/pdf');
+
+export const hasSatisfiedHandheldSawApproval = (details?: Partial<HandheldSawPermitDetails> | null): boolean => {
+    if (!details) return false;
+    if (hasUploadedApprovalPdf(details)) return true;
+    const zoneManagerApproval = !!details.zoneManagerEndorsement?.data;
+    const projectDirectorApproval = !!details.projectDirectorSignature?.data && !!details.projectDirectorDeclaration;
+    return zoneManagerApproval || projectDirectorApproval;
+};
 
 export type HandheldSawFormTab = 'details' | 'approvals' | 'receiver' | 'issuer' | 'closeout';
 
@@ -291,16 +304,11 @@ export const validateHandheldSawIssuance = (permit: Permit): string[] => {
         errors.push('Finish date and time must be after the start and within the 7-day permit validity period.');
     }
     if (!details.alternativesReviewed) errors.push('Zone Manager must record whether alternatives were reviewed.');
-    const verifiedApprovalPdf = !!details.managerApprovalUrl &&
-        details.managerApprovalContentType === 'application/pdf' &&
-        !!details.managerApprovalVerifiedByIssuer;
-    const zoneManagerApproval = !!details.zoneManagerEndorsement?.data;
-    const projectDirectorApproval = !!details.projectDirectorSignature?.data && !!details.projectDirectorDeclaration;
-    if (!verifiedApprovalPdf && !zoneManagerApproval && !projectDirectorApproval) {
-        errors.push('Complete one approval path: Permit Issuer-verified approval PDF, Zone Manager endorsement, or Project Director approval.');
+    const uploadedApprovalPdf = hasUploadedApprovalPdf(details);
+    if (!hasSatisfiedHandheldSawApproval(details)) {
+        errors.push('Complete one approval path: upload a Manager Approval PDF, or complete Zone Manager endorsement / Project Director approval (PIN + ACL required).');
     }
-    if (details.managerApprovalVerifiedByIssuer &&
-        (!details.managerApprovalUrl || details.managerApprovalContentType !== 'application/pdf')) {
+    if (details.managerApprovalVerifiedByIssuer && !uploadedApprovalPdf) {
         errors.push('Only an uploaded PDF document can satisfy Permit Issuer approval verification.');
     }
     if (!details.bladeGuards) errors.push('Blade guard requirement must be answered.');

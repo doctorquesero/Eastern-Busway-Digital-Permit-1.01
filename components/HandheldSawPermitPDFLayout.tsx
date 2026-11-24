@@ -4,11 +4,13 @@ import { HandheldSawPermitDetails, Permit, Signature } from '../types';
 import { buildAuditPdfUrl } from '../utils/auditUrl';
 import { getAppMode } from '../utils/appMode';
 import {
+    HANDHELD_SAW_APPROVAL_LEGAL_WARNING,
     HANDHELD_SAW_SERVICES,
     HANDHELD_SAW_TITLE,
     HANDHELD_SAW_VALIDITY_DAYS,
     HANDHELD_SAW_WORK_CONTROLS,
     formatHandheldSawPermitNumber,
+    hasUploadedApprovalPdf,
     timeTo12Hour
 } from '../utils/handheldSawPermit';
 
@@ -51,6 +53,7 @@ const Pair: React.FC<{ label: string; value: React.ReactNode }> = ({ label, valu
 const HandheldSawPermitPDFLayout: React.FC<HandheldSawPermitPDFLayoutProps> = ({ permit }) => {
     const data: HandheldSawPermitDetails = permit.handheldSaw!;
     const formattedPermitNumber = formatHandheldSawPermitNumber(permit.itwocxNumber || permit.permitNumber);
+    const hasApprovalPdf = hasUploadedApprovalPdf(data);
     const invalidServiceFlag = Object.values(data.services || {}).some(status => status === 'Y' || status === 'U');
     const managerApprovalUrl = data.managerApprovalUrl;
     const origin = typeof window === 'undefined' ? 'https://eba-digital-permits.web.app' : window.location.origin;
@@ -118,8 +121,11 @@ const HandheldSawPermitPDFLayout: React.FC<HandheldSawPermitPDFLayoutProps> = ({
                         <p className="mt-2 font-bold uppercase">Status: {value(permit.status)}</p>
                     </div>
                 </header>
-                <p className="border border-black p-3 mb-5 font-bold">
-                    Complete Part A and use one approval path: an approval PDF verified by the Permit Issuer, Zone Manager endorsement, or Project Director approval. Do not combine approval paths unless required by the work.
+                <p className="border border-black p-3 mb-3 font-bold">
+                    Complete Part A and use one approval path: upload a Manager Approval PDF, or complete Zone Manager endorsement / Project Director approval (PIN + ACL required).
+                </p>
+                <p className="border border-red-400 bg-red-50 text-red-700 p-2 mb-4 font-bold">
+                    {HANDHELD_SAW_APPROVAL_LEGAL_WARNING}
                 </p>
                 <Section title="Part A: Permit & Site Details">
                     <div className="grid grid-cols-2 gap-x-6">
@@ -140,12 +146,22 @@ const HandheldSawPermitPDFLayout: React.FC<HandheldSawPermitPDFLayoutProps> = ({
                     <Pair label="3. How is the item being cut supported to prevent blade jamming" value={data.safetyCase.supportToPreventJamming} />
                     <Pair label="4. Is direct supervision oversight planned" value={data.safetyCase.directSupervision} />
                     <Pair label="5. What is the duration of the work" value={data.safetyCase.duration} />
-                    <div className="mt-3"><SignatureBlock title="Endorsed By — Zone Manager" signature={data.zoneManagerEndorsement} comments={data.zoneManagerComments} /></div>
+                    {hasApprovalPdf && !data.zoneManagerEndorsement?.data ? (
+                        <p className="mt-3 border border-gray-400 p-2 font-bold">Approval provided via uploaded Manager Approval PDF (see Page 9) — manual Zone Manager PIN/ACL sign-off not required.</p>
+                    ) : (
+                        <div className="mt-3"><SignatureBlock title="Endorsed By — Zone Manager" signature={data.zoneManagerEndorsement} comments={data.zoneManagerComments} /></div>
+                    )}
                 </Section>
                 <Section title="Part C: Project Director Approval — Alternative Approval Path">
-                    <p className="border border-gray-400 p-3 italic mb-3">I hereby approve of this permit, which is to be carried out strictly in accordance with the established safety case.</p>
-                    <p><b>Declaration:</b> {data.projectDirectorDeclaration ? 'APPROVED' : 'NOT APPROVED'}</p>
-                    <SignatureBlock title="Project Director" signature={data.projectDirectorSignature} comments={data.projectDirectorComments} />
+                    {hasApprovalPdf && !data.projectDirectorSignature?.data ? (
+                        <p className="border border-gray-400 p-2 font-bold">Approval provided via uploaded Manager Approval PDF (see Page 9) — manual Project Director PIN/ACL sign-off not required.</p>
+                    ) : (
+                        <>
+                            <p className="border border-gray-400 p-3 italic mb-3">I hereby approve of this permit, which is to be carried out strictly in accordance with the established safety case.</p>
+                            <p><b>Declaration:</b> {data.projectDirectorDeclaration ? 'APPROVED' : 'NOT APPROVED'}</p>
+                            <SignatureBlock title="Project Director" signature={data.projectDirectorSignature} comments={data.projectDirectorComments} />
+                        </>
+                    )}
                 </Section>
                 <footer className="mt-auto pt-3 border-t border-gray-400 text-[9px] flex justify-between">
                     <span>{formattedPermitNumber || '—'}</span><span>Page 2 of 9</span>
@@ -250,6 +266,9 @@ const HandheldSawPermitPDFLayout: React.FC<HandheldSawPermitPDFLayoutProps> = ({
 
             <article className="pdf-page p-10">
                 <Section title="Manager Approval Documentation">
+                    <p className="border border-red-400 bg-red-50 text-red-700 p-2 mb-3 font-bold">
+                        {HANDHELD_SAW_APPROVAL_LEGAL_WARNING}
+                    </p>
                     <p className="mb-3">Required regional / zone / project manager approval provided by the applicant.</p>
                     <Pair label="Approval file" value={data.managerApprovalFileName} />
                     <Pair label="Uploaded by" value={data.managerApprovalUploadedBy} />

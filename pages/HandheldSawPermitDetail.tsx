@@ -19,6 +19,7 @@ import {
     applyHandheldSawPatch,
     applyHandheldSawPermitPatch,
     createInitialHandheldSawDetails,
+    HANDHELD_SAW_APPROVAL_LEGAL_WARNING,
     HANDHELD_SAW_FORM_TABS,
     HANDHELD_SAW_SERVICES,
     HANDHELD_SAW_TITLE,
@@ -28,6 +29,8 @@ import {
     finishDateForHandheldSawStart,
     formatHandheldSawPermitNumber,
     hasHandheldSawSchedule,
+    hasSatisfiedHandheldSawApproval,
+    hasUploadedApprovalPdf,
     mergeHandheldSawDetails,
     stripHandheldSawPermitPrefix,
     tabForHandheldSawValidationErrors,
@@ -309,8 +312,8 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
     const data = useMemo(() => mergeHandheldSawDetails(permit?.handheldSaw), [permit?.handheldSaw]);
     const hasZoneManagerEndorsement = !!data.zoneManagerEndorsement?.data;
     const hasProjectDirectorSignature = !!data.projectDirectorSignature?.data;
-    const approvalPdfVerified = !!data.managerApprovalUrl && data.managerApprovalContentType === 'application/pdf' && !!data.managerApprovalVerifiedByIssuer;
-    const approvalsComplete = approvalPdfVerified || hasZoneManagerEndorsement || (hasProjectDirectorSignature && data.projectDirectorDeclaration);
+    const hasApprovalPdf = hasUploadedApprovalPdf(data);
+    const approvalsComplete = hasSatisfiedHandheldSawApproval(data);
     const isClosed = permit?.status === 'closed';
     const isIssued = permit?.isDraft === false && !isClosed;
     const hasUnconfirmedServices = Object.values(data.services).some(value => value === 'Y' || value === 'U');
@@ -526,7 +529,7 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
             await setDoc(doc(db, environment.collection, permit.id), buildCloudPayload(next), { merge: true });
             setPermit(next);
             savePermit(next);
-            setSuccessMessage(kind === 'manager' ? 'Manager approval PDF uploaded. The Permit Issuer must verify it before issuance.' : 'Service drawings uploaded and saved.');
+            setSuccessMessage(kind === 'manager' ? 'Manager approval PDF uploaded and saved. Manual Zone Manager / Project Director PIN sign-off is not required.' : 'Service drawings uploaded and saved.');
         } catch (error) {
             console.error(`Unable to upload ${kind} documentation:`, error);
             setErrorMessage('Upload failed. The approval or drawings were not saved; check the connection and retry.');
@@ -790,7 +793,7 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
                     <span className={`rounded-full px-4 py-2 text-xs font-black ${isClosed ? 'bg-gray-900 text-white' : isIssued ? 'bg-green-100 text-green-900' : 'bg-amber-100 text-amber-900'}`}>{statusLabel}</span>
                 </div>
                 <p className="mt-4 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
-                    Complete Details and choose one approval path: a Permit Issuer-verified approval PDF, a Zone Manager endorsement, or a Project Director approval.
+                    Complete Details and choose one approval path: upload a Manager Approval PDF, or complete Zone Manager endorsement / Project Director approval (PIN + ACL required).
                 </p>
                 <p className="mt-2 text-xs font-semibold text-gray-600">Preselected service, equipment, control and PPE responses are editable starting values. Confirm every response against actual site conditions before signing.</p>
                 {(errorMessage || successMessage) && <div role={errorMessage ? 'alert' : 'status'} className={`mt-4 whitespace-pre-wrap rounded-lg p-3 text-sm font-bold ${errorMessage ? 'bg-red-50 text-red-800' : 'bg-green-50 text-green-800'}`}>{errorMessage || successMessage}</div>}
@@ -799,7 +802,7 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
             <nav aria-label="Handheld saw permit sections" className="sticky top-0 z-30 flex items-center gap-1 overflow-x-auto rounded-lg border bg-white p-1 shadow-sm">
                 {tabs.map(tab => {
                     const locked = tab.id !== 'details' && tab.id !== 'approvals' && !approvalsComplete;
-                    return <button key={tab.id} type="button" disabled={locked} onClick={() => setActiveTab(tab.id)} aria-disabled={locked} title={locked ? 'Complete one approval path: verified PDF, Zone Manager signature, or Project Director approval.' : undefined} className={`shrink-0 rounded-md px-3 py-3 text-[10px] font-black uppercase sm:px-4 sm:text-xs ${activeTab === tab.id ? 'bg-teal-800 text-white' : locked ? 'cursor-not-allowed text-gray-300' : 'text-gray-600 hover:bg-gray-100'}`}>{tab.label}{locked ? ' 🔒' : ''}</button>;
+                    return <button key={tab.id} type="button" disabled={locked} onClick={() => setActiveTab(tab.id)} aria-disabled={locked} title={locked ? 'Complete one approval path: upload an approval PDF, or complete Zone Manager / Project Director PIN + ACL sign-off.' : undefined} className={`shrink-0 rounded-md px-3 py-3 text-[10px] font-black uppercase sm:px-4 sm:text-xs ${activeTab === tab.id ? 'bg-teal-800 text-white' : locked ? 'cursor-not-allowed text-gray-300' : 'text-gray-600 hover:bg-gray-100'}`}>{tab.label}{locked ? ' 🔒' : ''}</button>;
                 })}
             </nav>
 
@@ -857,49 +860,60 @@ const HandheldSawPermitDetail: React.FC<{ id: string; onBack: () => void }> = ({
                         </div>
                     </FormSection>
 
-                    <FormSection title="Part B — Zone Manager Sign-off (PIN + ACL Required)">
-                        {aclLoadError && <p className="rounded bg-red-50 p-3 text-sm font-bold text-red-800">{aclLoadError}; Zone Manager signatures are unavailable until the ACL can be verified.</p>}
-                        <AclRoleSignature users={aclUsers} role="Zone Manager" label="Endorsed By — Zone Manager signature" initialValue={data.zoneManagerEndorsement} invalid={!approvalsComplete} readOnly={isClosed || !!aclLoadError} onSave={(signature, user, pin) => saveAclSignature('zoneManagerEndorsement', signature, user, pin)} />
-                        <SignatureTimestamp signature={data.zoneManagerEndorsement} />
-                        <TextAreaField label="Zone Manager endorsement comments" value={data.zoneManagerComments || ''} onChange={zoneManagerComments => updateSaw({ zoneManagerComments })} disabled={isClosed || !isZoneManager} />
-                        <p className="text-sm font-bold text-amber-900">This endorsement is one available approval path; a verified approval PDF or Project Director approval can be used instead.</p>
-                    </FormSection>
-
-                    <FormSection title="Part C: Project Director Approval — Alternative Approval Path">
-                        <label className={`flex items-start gap-3 rounded-lg border p-3 font-bold ${hasProjectDirectorSignature && !data.projectDirectorDeclaration && !hasZoneManagerEndorsement && !approvalPdfVerified ? 'border-red-500 bg-red-50 text-red-800' : ''}`}>
-                            <input type="checkbox" className="mt-1 h-5 w-5" checked={data.projectDirectorDeclaration} aria-invalid={hasProjectDirectorSignature && !data.projectDirectorDeclaration && !hasZoneManagerEndorsement && !approvalPdfVerified} disabled={isClosed || !hasProjectDirectorSignature} onChange={event => updateSaw({ projectDirectorDeclaration: event.target.checked })} />
-                            I hereby approve of this permit, which is to be carried out strictly in accordance with the established safety case.
-                        </label>
-                        <AclRoleSignature users={aclUsers} role="Project Director" label="Project Director name and signature (PIN + ACL required)" initialValue={data.projectDirectorSignature} invalid={!approvalsComplete} readOnly={isClosed || !!aclLoadError} onSave={(signature, user, pin) => saveAclSignature('projectDirectorSignature', signature, user, pin)} />
-                        <SignatureTimestamp signature={data.projectDirectorSignature} />
-                        <TextAreaField label="Project Director — Further comments" value={data.projectDirectorComments} onChange={projectDirectorComments => updateSaw({ projectDirectorComments })} disabled={isClosed || !isProjectDirector} />
-                        <p className="text-xs font-bold text-amber-800">A Zone Manager signature is not required when the Project Director completes this approval path.</p>
-                    </FormSection>
-
-                    <FormSection title="Manager Approval PDF & Permit Issuer Verification">
-                        <p className="rounded-lg bg-blue-50 p-3 text-sm font-semibold text-blue-950">Upload the regional / zone / project manager approval PDF. The Permit Issuer must inspect and verify this document before issue.</p>
-                        {data.managerApprovalUrl ? (
-                            <div className="rounded-lg border border-green-200 bg-green-50 p-3">
-                                <p className="font-black text-green-900">Approval PDF: {data.managerApprovalFileName}</p>
-                                <a href={data.managerApprovalUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block break-all text-sm font-bold text-blue-700 underline">Open approval PDF</a>
-                                {!isClosed && (isIssuer || isSiteEngineer || isZoneManager) && <button type="button" onClick={() => void removeManagerApproval()} disabled={isUploading} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-black text-red-700 disabled:opacity-50">
-                                    {isUploading ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />} Remove approval PDF
-                                </button>}
+                    <FormSection title="Manager Approval PDF">
+                        <p role="note" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-bold text-red-700">
+                            {HANDHELD_SAW_APPROVAL_LEGAL_WARNING}
+                        </p>
+                        <p className="rounded-lg bg-blue-50 p-3 text-sm font-semibold text-blue-950">
+                            Upload a signed regional / zone / project manager approval PDF. When a valid approval PDF is uploaded, manual Zone Manager and Project Director PIN/ACL sign-off is not required.
+                        </p>
+                        {hasApprovalPdf ? (
+                            <div className="space-y-2 rounded-lg border border-green-300 bg-green-50 p-4">
+                                <p className="font-black text-green-900">Approval PDF attached: {data.managerApprovalFileName}</p>
+                                <p className="text-xs font-bold text-green-800">Approval path satisfied — manual Zone Manager and Project Director PIN/ACL sign-off is not required.</p>
+                                <a href={data.managerApprovalUrl} target="_blank" rel="noreferrer" className="inline-block break-all text-sm font-bold text-blue-700 underline">Open approval PDF</a>
+                                {!isClosed && (isIssuer || isSiteEngineer || isZoneManager) && <div>
+                                    <button type="button" onClick={() => void removeManagerApproval()} disabled={isUploading} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-black text-red-700 disabled:opacity-50">
+                                        {isUploading ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />} Remove approval PDF
+                                    </button>
+                                </div>}
                             </div>
-                        ) : <p className={`text-sm font-bold ${approvalsComplete ? 'text-gray-600' : 'text-red-700'}`}>Manager approval PDF not uploaded{approvalsComplete ? ' (optional because another approval path is complete).' : ' — complete this or another approval path before issue.'}</p>}
+                        ) : <p className={`text-sm font-bold ${approvalsComplete ? 'text-gray-600' : 'text-red-700'}`}>No Manager Approval PDF uploaded{approvalsComplete ? ' (optional because manual Zone Manager or Project Director sign-off is complete).' : ' — upload an approval PDF above, or complete manual Zone Manager / Project Director PIN + ACL sign-off below.'}</p>}
                         <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg px-4 py-3 text-sm font-black text-white ${isUploading || isClosed || !(isIssuer || isSiteEngineer || isZoneManager) ? 'bg-gray-400' : 'bg-teal-700 hover:bg-teal-800'}`}>
                             {isUploading ? <Loader2 className="animate-spin" size={16} /> : <CloudUpload size={16} />}
-                            Upload Manager Approval PDF
+                            {hasApprovalPdf ? 'Replace Manager Approval PDF' : 'Upload Manager Approval PDF'}
                             <input type="file" accept="application/pdf,.pdf" className="sr-only" disabled={isUploading || isClosed || !(isIssuer || isSiteEngineer || isZoneManager)} onChange={event => uploadDocument(event, 'manager')} />
                         </label>
-                        {data.managerApprovalUrl && <label className={`flex items-start gap-3 rounded-lg border p-3 font-bold ${!data.managerApprovalVerifiedByIssuer && !hasZoneManagerEndorsement && !(hasProjectDirectorSignature && data.projectDirectorDeclaration) ? 'border-red-500 bg-red-50 text-red-800' : ''}`}>
-                            <input type="checkbox" className="mt-1 h-5 w-5" checked={!!data.managerApprovalVerifiedByIssuer} disabled={isClosed || !isIssuer || data.managerApprovalContentType !== 'application/pdf'} onChange={event => void verifyManagerApproval(event.target.checked)} />
-                            Permit Issuer verified the uploaded approval PDF
-                        </label>}
-                        {data.managerApprovalVerifiedByIssuer && <p className="text-xs font-bold text-green-800">Verified by {data.managerApprovalVerifiedBy || 'Permit Issuer'} at {data.managerApprovalVerifiedAt ? new Date(data.managerApprovalVerifiedAt).toLocaleString() : '—'}.</p>}
-                        <TextAreaField label="Approval PDF verification comments" value={data.managerApprovalVerificationComments || ''} onChange={managerApprovalVerificationComments => updateSaw({ managerApprovalVerificationComments })} disabled={isClosed || !isIssuer} />
-                        {!isIssuer && <p className="text-xs text-amber-800">Only the Permit Issuer or Master can verify the approval PDF.</p>}
+                        {hasApprovalPdf && <>
+                            <label className="flex items-start gap-3 rounded-lg border border-gray-200 p-3 font-bold">
+                                <input type="checkbox" className="mt-1 h-5 w-5" checked={!!data.managerApprovalVerifiedByIssuer} disabled={isClosed || !isIssuer} onChange={event => void verifyManagerApproval(event.target.checked)} />
+                                Permit Issuer verified the uploaded approval PDF (optional record)
+                            </label>
+                            {data.managerApprovalVerifiedByIssuer && <p className="text-xs font-bold text-green-800">Verified by {data.managerApprovalVerifiedBy || 'Permit Issuer'} at {data.managerApprovalVerifiedAt ? new Date(data.managerApprovalVerifiedAt).toLocaleString() : '—'}.</p>}
+                            <TextAreaField label="Approval PDF verification comments (optional)" value={data.managerApprovalVerificationComments || ''} onChange={managerApprovalVerificationComments => updateSaw({ managerApprovalVerificationComments })} disabled={isClosed || !isIssuer} />
+                        </>}
                     </FormSection>
+
+                    {!hasApprovalPdf && <>
+                        <FormSection title="Part B — Zone Manager Sign-off (PIN + ACL Required)">
+                            {aclLoadError && <p className="rounded bg-red-50 p-3 text-sm font-bold text-red-800">{aclLoadError}; Zone Manager signatures are unavailable until the ACL can be verified.</p>}
+                            <AclRoleSignature users={aclUsers} role="Zone Manager" label="Endorsed By — Zone Manager signature" initialValue={data.zoneManagerEndorsement} invalid={!approvalsComplete} readOnly={isClosed || !!aclLoadError} onSave={(signature, user, pin) => saveAclSignature('zoneManagerEndorsement', signature, user, pin)} />
+                            <SignatureTimestamp signature={data.zoneManagerEndorsement} />
+                            <TextAreaField label="Zone Manager endorsement comments (optional)" value={data.zoneManagerComments || ''} onChange={zoneManagerComments => updateSaw({ zoneManagerComments })} disabled={isClosed || !isZoneManager} />
+                            <p className="text-sm font-bold text-amber-900">This endorsement is one available approval path; an uploaded approval PDF or Project Director approval can be used instead.</p>
+                        </FormSection>
+
+                        <FormSection title="Part C: Project Director Approval — Alternative Approval Path">
+                            <label className={`flex items-start gap-3 rounded-lg border p-3 font-bold ${hasProjectDirectorSignature && !data.projectDirectorDeclaration && !hasZoneManagerEndorsement ? 'border-red-500 bg-red-50 text-red-800' : ''}`}>
+                                <input type="checkbox" className="mt-1 h-5 w-5" checked={data.projectDirectorDeclaration} aria-invalid={hasProjectDirectorSignature && !data.projectDirectorDeclaration && !hasZoneManagerEndorsement} disabled={isClosed || !hasProjectDirectorSignature} onChange={event => updateSaw({ projectDirectorDeclaration: event.target.checked })} />
+                                I hereby approve of this permit, which is to be carried out strictly in accordance with the established safety case.
+                            </label>
+                            <AclRoleSignature users={aclUsers} role="Project Director" label="Project Director name and signature (PIN + ACL required)" initialValue={data.projectDirectorSignature} invalid={!approvalsComplete} readOnly={isClosed || !!aclLoadError} onSave={(signature, user, pin) => saveAclSignature('projectDirectorSignature', signature, user, pin)} />
+                            <SignatureTimestamp signature={data.projectDirectorSignature} />
+                            <TextAreaField label="Project Director — Further comments (optional)" value={data.projectDirectorComments} onChange={projectDirectorComments => updateSaw({ projectDirectorComments })} disabled={isClosed || !isProjectDirector} />
+                            <p className="text-xs font-bold text-amber-800">A Zone Manager signature is not required when the Project Director completes this approval path.</p>
+                        </FormSection>
+                    </>}
                 </div>
             )}
 

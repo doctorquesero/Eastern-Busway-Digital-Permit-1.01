@@ -6,6 +6,7 @@ import {
     applyHandheldSawPatch,
     applyHandheldSawPermitPatch,
     createInitialHandheldSawDetails,
+    HANDHELD_SAW_APPROVAL_LEGAL_WARNING,
     HANDHELD_SAW_FORM_TABS,
     HANDHELD_SAW_SERVICES,
     HANDHELD_SAW_WORK_CONTROLS,
@@ -14,6 +15,8 @@ import {
     formatHandheldSawPermitNumber,
     hasHandheldSawPermitValidity,
     hasHandheldSawSchedule,
+    hasSatisfiedHandheldSawApproval,
+    hasUploadedApprovalPdf,
     stripHandheldSawPermitPrefix,
     tabForHandheldSawValidationErrors,
     timeFrom12Hour,
@@ -314,6 +317,32 @@ test('withClearedSignatureDeletes only deletes receiverSignature when explicitly
     assert.equal(explicitlyClearedReceiver.receiverSignature, DELETE);
 });
 
+test('uploaded approval PDF satisfies approval without manual Zone Manager or Project Director sign-off', () => {
+    const uploadedPdfOnly = validPermit();
+    uploadedPdfOnly.handheldSaw.zoneManagerEndorsement = undefined;
+    uploadedPdfOnly.handheldSaw.projectDirectorSignature = undefined;
+    uploadedPdfOnly.handheldSaw.projectDirectorDeclaration = false;
+    uploadedPdfOnly.handheldSaw.managerApprovalVerifiedByIssuer = false;
+    assert.equal(hasUploadedApprovalPdf(uploadedPdfOnly.handheldSaw), true);
+    assert.equal(hasSatisfiedHandheldSawApproval(uploadedPdfOnly.handheldSaw), true);
+    assert.deepEqual(validateHandheldSawIssuance(uploadedPdfOnly), []);
+
+    const nonPdfUpload = validPermit();
+    nonPdfUpload.handheldSaw.zoneManagerEndorsement = undefined;
+    nonPdfUpload.handheldSaw.projectDirectorSignature = undefined;
+    nonPdfUpload.handheldSaw.projectDirectorDeclaration = false;
+    nonPdfUpload.handheldSaw.managerApprovalContentType = 'image/png';
+    nonPdfUpload.handheldSaw.managerApprovalVerifiedByIssuer = false;
+    assert.equal(hasUploadedApprovalPdf(nonPdfUpload.handheldSaw), false);
+    assert.equal(hasSatisfiedHandheldSawApproval(nonPdfUpload.handheldSaw), false);
+    assert.ok(validateHandheldSawIssuance(nonPdfUpload).some(error => error.includes('Complete one approval path')));
+
+    assert.equal(
+        HANDHELD_SAW_APPROVAL_LEGAL_WARNING,
+        '⚠️ False or misleading approval records are an offence under NZ law (Health and Safety at Work Act 2015) and carry legal and disciplinary consequences.'
+    );
+});
+
 test('official PDF layout includes the cover page and chronologically numbered Parts A-H', () => {
     const require = createRequire(import.meta.url);
     const result = buildSync({
@@ -367,8 +396,20 @@ test('official PDF layout includes the cover page and chronologically numbered P
     assert.ok(html.includes('Page 9 of 9'));
     assert.ok(html.includes('NO</th>'));
     assert.ok(html.includes('Comments (optional)'));
+    assert.ok(html.includes(HANDHELD_SAW_APPROVAL_LEGAL_WARNING));
+    assert.ok(html.includes('text-red-700'));
     assert.ok(!html.includes('mandatory for NO or N/A'));
     assert.ok(!html.includes('ITWOCX#'));
+
+    const pdfOnlyPermit = validPermit();
+    pdfOnlyPermit.handheldSaw.zoneManagerEndorsement = undefined;
+    pdfOnlyPermit.handheldSaw.projectDirectorSignature = undefined;
+    pdfOnlyPermit.handheldSaw.projectDirectorDeclaration = false;
+    pdfOnlyPermit.handheldSaw.managerApprovalVerifiedByIssuer = false;
+    const pdfOnlyHtml = module.exports(pdfOnlyPermit);
+    assert.ok(pdfOnlyHtml.includes('manual Zone Manager PIN/ACL sign-off not required'));
+    assert.ok(pdfOnlyHtml.includes('manual Project Director PIN/ACL sign-off not required'));
+    assert.ok(pdfOnlyHtml.includes(HANDHELD_SAW_APPROVAL_LEGAL_WARNING));
     assert.ok(!html.includes('1. Scope comments'));
     assert.ok(!html.includes('2. Item being cut comments'));
     const coverPage = html.slice(0, html.indexOf('Page 1 of 9'));
